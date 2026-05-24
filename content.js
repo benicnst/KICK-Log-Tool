@@ -772,7 +772,7 @@
   const popover = createPopover();
 
   window.__KICK_CHAT_HISTORY_HOVER__ = {
-    version: "2.35.0",
+    version: "2.36.0",
     getChatRootCount: () => getChatRoots().length,
     getKnownUsers: () => [...userHistory.values()].map((value) => ({
       username: value.displayName,
@@ -934,7 +934,8 @@
     popover.style.top = "0px";
 
     const popoverRect = popover.getBoundingClientRect();
-    let left = rect.left + Math.min(96, Math.max(24, rect.width * 0.35));
+    const alignRect = getPopoverAlignmentRect(anchor) || rect;
+    let left = alignRect.right - popoverRect.width;
     let top = rect.bottom + gap;
 
     if (left + popoverRect.width > window.innerWidth - margin) {
@@ -946,6 +947,12 @@
     }
 
     setPopoverPosition(left, top);
+  }
+
+  function getPopoverAlignmentRect(anchor) {
+    const chatRoot = getContainingChatRoot(anchor) || getContainingChatRoot(activeRow);
+    if (!chatRoot || !isVisibleElement(chatRoot)) return null;
+    return chatRoot.getBoundingClientRect();
   }
 
   function setPopoverPosition(left, top) {

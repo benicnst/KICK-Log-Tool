@@ -1,7 +1,7 @@
 .kch-popover {
   position: fixed;
   z-index: 2147483647;
-  width: min(244px, calc(100vw - 24px));
+  width: min(254px, calc(100vw - 24px));
   max-height: min(330px, calc(100vh - 24px));
   overflow: hidden;
   border: 1px solid rgba(83, 252, 24, 0.45);

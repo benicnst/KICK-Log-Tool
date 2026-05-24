@@ -103,7 +103,6 @@ window.__KICK_CHAT_HISTORY_HOVER__.setModerationActionsEnabled(false)
 - 取得したチャット履歴はKickページ側の`localStorage`に保存します。
 - ユーザーごとの履歴は設定された最大件数までに制限されます。
 - ログイントークンや個人情報の入力は不要です。
-- このリポジトリには個人の連絡先やメールアドレスを含めていません。
 
 ### APIについて
 
@@ -217,7 +216,6 @@ window.__KICK_CHAT_HISTORY_HOVER__.setModerationActionsEnabled(false)
 - Captured chat history is stored in the Kick page's `localStorage`.
 - History is limited to the configured maximum number of messages per user.
 - The extension does not require a login token or any user-provided personal information.
-- This repository intentionally does not include personal contact details or email addresses.
 
 ### API Behavior
 

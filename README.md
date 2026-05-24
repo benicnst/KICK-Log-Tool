@@ -54,6 +54,7 @@ EdgeとBraveもChromium系ブラウザのため、未パッケージ拡張機能
 - 閉じるボタンで固定ポップアップを閉じられます。
 - チャットがスクロールで一時停止している間だけ、固定ユーザーの新着確認に限定API確認を使います。
 - チャット一時停止を解除すると、表示チャット欄のDOM監視によるリアルタイム取得に戻ります。
+- リアルタイム取得で投稿時刻が取れない場合は、直近のKick APIと照合して投稿時刻への補正を試みます。
 
 ### ドクロマーク判定について
 
@@ -107,7 +108,7 @@ window.__KICK_CHAT_HISTORY_HOVER__.setModerationActionsEnabled(false)
 - このプロジェクトが管理する外部サーバーは使いません。
 - 取得したチャット履歴は外部サーバーへ送信しません。
 - ページを開いている間だけKickページ側の`localStorage`へ一時保存し、ページを閉じる時に削除します。
-- 履歴補完やチャット一時停止中の固定ユーザー確認のため、KickのAPIへ通信する場合があります。
+- 履歴補完、投稿時刻補正、チャット一時停止中の固定ユーザー確認のため、KickのAPIへ通信する場合があります。
 - ユーザーごとの履歴は設定された最大件数までに制限されます。
 - 投稿時刻が取得できないコメントは、取得時刻として区別して表示します。
 - ログイントークンや個人情報の入力は不要です。
@@ -117,6 +118,7 @@ window.__KICK_CHAT_HISTORY_HOVER__.setModerationActionsEnabled(false)
 Kickには、この用途向けの安定した公開チャット履歴APIはありません。この拡張機能は、以下の場合に限定して非公式エンドポイントを使用します。
 
 - ローカルで取得済みの履歴が20件未満の場合の履歴補完。
+- リアルタイム取得したコメントの投稿時刻補正。
 - チャットがスクロールで一時停止している間の固定ユーザー確認。
 
 不要な負荷を避けるため、APIアクセスは制限しています。
@@ -184,6 +186,7 @@ Edge and Brave support unpacked Chromium extensions.
 - Close a pinned popup with the close button.
 - When chat is paused by scrolling, pinned users are checked through the limited API refresh.
 - When chat pause is released, realtime capture returns to the visible chat DOM.
+- When realtime capture does not include a posting time, the extension tries to correct it by matching recent Kick API messages.
 
 ### Suspicious Account Marker
 
@@ -237,7 +240,7 @@ window.__KICK_CHAT_HISTORY_HOVER__.setModerationActionsEnabled(false)
 - The extension does not use an external server controlled by this project.
 - Captured chat history is not sent to an external server.
 - It is temporarily stored in the Kick page's `localStorage` while the page is open and cleared when the page is closed.
-- The extension may communicate with Kick APIs for history backfill and pinned-user checks while chat is paused.
+- The extension may communicate with Kick APIs for history backfill, posting-time correction, and pinned-user checks while chat is paused.
 - History is limited to the configured maximum number of messages per user.
 - Comments without an available posting time are labeled as captured time.
 - The extension does not require a login token or any user-provided personal information.
@@ -247,6 +250,7 @@ window.__KICK_CHAT_HISTORY_HOVER__.setModerationActionsEnabled(false)
 Kick does not provide a stable public chat-history API for this use case. This extension uses limited unofficial endpoints for:
 
 - Backfilling missing recent history when local captured history is under 20 comments.
+- Correcting posting times for realtime-captured comments.
 - Checking pinned users while the Kick chat is paused because of scrolling.
 
 API access is intentionally limited to reduce unnecessary load:

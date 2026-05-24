@@ -14,6 +14,11 @@
   const PINNED_API_REFRESH_MS = 15 * 1000;
   const PINNED_API_LOOKBACK_WINDOWS = 2;
   const BACKFILL_RETRY_MS = 45 * 1000;
+  const TIMESTAMP_CORRECTION_DEBOUNCE_MS = 1800;
+  const TIMESTAMP_CORRECTION_MIN_INTERVAL_MS = 7000;
+  const TIMESTAMP_CORRECTION_LOOKBACK_WINDOWS = 2;
+  const TIMESTAMP_CORRECTION_MAX_PENDING = 80;
+  const TIMESTAMP_CORRECTION_MAX_ATTEMPTS = 3;
   const CHAT_PAUSED_PATTERNS = [
     "スクロールのためにチャットが一時停止",
     "チャットが一時停止",
@@ -27,9 +32,11 @@
   const apiWindowCache = new Set();
   const pinnedApiCheckingUsers = new Set();
   const userBackfillState = new Map();
+  const pendingTimestampCorrections = new Map();
   const apiDebug = {
     attempts: 0,
     contextAttempts: 0,
+    timestampCorrectionAttempts: 0,
     lastUrl: "",
     lastStatus: "",
     lastMessageCount: 0,
@@ -57,6 +64,9 @@
   let scanInterval = 0;
   let pinnedApiInterval = 0;
   let pinnedApiChecking = false;
+  let timestampCorrectionTimer = 0;
+  let timestampCorrectionRunning = false;
+  let lastTimestampCorrectionAt = 0;
   let routeResetInProgress = false;
   let pinnedDragState = null;
   let popoverShownAt = 0;
@@ -580,14 +590,7 @@
     };
 
     existing.displayName = username;
-    const duplicate = existing.messages.find((message) => {
-      if (messageId && message.id === messageId) return true;
-      if (message.text !== text) return false;
-      if (Math.abs(message.timestamp - timestamp) < 2500) return true;
-      return messageSource === "api" &&
-        getMessageTimestampKind(message) === "observed" &&
-        Math.abs(message.timestamp - timestamp) < 10 * 60 * 1000;
-    });
+    const duplicate = findDuplicateMessage(existing.messages, text, timestamp, messageId, messageSource);
 
     if (!duplicate) {
       existing.messages.unshift({
@@ -621,6 +624,38 @@
     return !duplicate;
   }
 
+  function findDuplicateMessage(messages, text, timestamp, messageId, messageSource) {
+    if (messageId) {
+      const matchingId = messages.find((message) => message.id === messageId);
+      if (matchingId) return matchingId;
+    }
+
+    const sameText = messages.filter((message) => message.text === text);
+    if (!sameText.length) return null;
+
+    if (messageSource === "api") {
+      const observedMatch = findNearestMessage(
+        sameText.filter((message) => {
+          return getMessageTimestampKind(message) === "observed" &&
+            Math.abs(message.timestamp - timestamp) < 10 * 60 * 1000;
+        }),
+        timestamp
+      );
+      if (observedMatch) return observedMatch;
+    }
+
+    return findNearestMessage(
+      sameText.filter((message) => Math.abs(message.timestamp - timestamp) < 2500),
+      timestamp
+    );
+  }
+
+  function findNearestMessage(messages, timestamp) {
+    return messages
+      .slice()
+      .sort((a, b) => Math.abs(a.timestamp - timestamp) - Math.abs(b.timestamp - timestamp))[0] || null;
+  }
+
   function pruneUsers() {
     while (userHistory.size > MAX_USERS) {
       const oldestKey = userHistory.keys().next().value;
@@ -645,6 +680,7 @@
     const timestamp = postedTimestamp || Date.now();
     const timestampKind = postedTimestamp ? "posted" : "observed";
     rememberMessage(user.username, messageText, timestamp, "", postedTimestamp ? "dom" : "observed", timestampKind);
+    if (!postedTimestamp) queueTimestampCorrection(user.username, messageText, timestamp);
 
     return {
       ...user,
@@ -772,7 +808,7 @@
   const popover = createPopover();
 
   window.__KICK_CHAT_HISTORY_HOVER__ = {
-    version: "2.36.0",
+    version: "2.37.0",
     getChatRootCount: () => getChatRoots().length,
     getKnownUsers: () => [...userHistory.values()].map((value) => ({
       username: value.displayName,
@@ -1363,16 +1399,9 @@
     }
 
     meta.classList.add("kch-popover__meta--observed");
-    meta.title = "投稿時刻が取得できないため、取得時刻を表示しています。ドクロ判定には使いません。";
-
-    const label = document.createElement("span");
-    label.className = "kch-popover__meta-label";
-    label.textContent = "取得";
-
-    const time = document.createElement("span");
-    time.textContent = formatTime(message.timestamp);
-
-    meta.append(label, time);
+    meta.textContent = formatTime(message.timestamp);
+    meta.title = "投稿時刻未確定。取得時刻を薄い斜線表示にしています。API照合で一致すれば投稿時刻に補正します。";
+    meta.setAttribute("aria-label", `投稿時刻未確定。取得時刻 ${formatTime(message.timestamp)}`);
   }
 
   function assessAccountRisk(messages) {
@@ -1753,6 +1782,8 @@
     routeResetInProgress = true;
     clearTimeout(saveTimer);
     clearTimeout(hideTimer);
+    clearTimeout(timestampCorrectionTimer);
+    timestampCorrectionTimer = 0;
     clearSavedHistory();
 
     hidePopover();
@@ -1760,8 +1791,10 @@
     userHistory.clear();
     apiWindowCache.clear();
     userBackfillState.clear();
+    pendingTimestampCorrections.clear();
     pinnedApiCheckingUsers.clear();
     pinnedApiChecking = false;
+    timestampCorrectionRunning = false;
     streamContext = null;
     activeChannelSlug = nextSlug;
     storageKey = `kch:${location.hostname}:${nextSlug}:route-pending`;
@@ -1834,6 +1867,109 @@
       : `${String(value).replace(" ", "T")}Z`;
     const timestamp = Date.parse(normalized);
     return Number.isFinite(timestamp) ? timestamp : 0;
+  }
+
+  function queueTimestampCorrection(username, text, observedAt) {
+    if (!username || !text || !observedAt) return;
+
+    const key = `${normalizeUsername(username)}\u0001${text}\u0001${Math.floor(observedAt / 1000)}`;
+    const existing = pendingTimestampCorrections.get(key);
+    pendingTimestampCorrections.set(key, {
+      username,
+      text,
+      observedAt,
+      attempts: existing?.attempts || 0
+    });
+
+    while (pendingTimestampCorrections.size > TIMESTAMP_CORRECTION_MAX_PENDING) {
+      pendingTimestampCorrections.delete(pendingTimestampCorrections.keys().next().value);
+    }
+
+    scheduleTimestampCorrection();
+  }
+
+  function scheduleTimestampCorrection(delay = TIMESTAMP_CORRECTION_DEBOUNCE_MS) {
+    if (timestampCorrectionTimer) window.clearTimeout(timestampCorrectionTimer);
+    timestampCorrectionTimer = window.setTimeout(runTimestampCorrection, delay);
+  }
+
+  async function runTimestampCorrection() {
+    timestampCorrectionTimer = 0;
+    pruneTimestampCorrectionQueue();
+
+    const candidates = [...pendingTimestampCorrections.values()]
+      .filter((candidate) => candidate.attempts < TIMESTAMP_CORRECTION_MAX_ATTEMPTS);
+    if (!candidates.length) return;
+
+    if (timestampCorrectionRunning) {
+      scheduleTimestampCorrection(TIMESTAMP_CORRECTION_MIN_INTERVAL_MS);
+      return;
+    }
+
+    const now = Date.now();
+    const nextAllowedAt = lastTimestampCorrectionAt + TIMESTAMP_CORRECTION_MIN_INTERVAL_MS;
+    if (now < nextAllowedAt) {
+      scheduleTimestampCorrection(nextAllowedAt - now);
+      return;
+    }
+
+    timestampCorrectionRunning = true;
+    for (const candidate of candidates) {
+      candidate.attempts += 1;
+    }
+
+    try {
+      if (!streamContext?.channelId || !streamContext?.startedAt) {
+        await initializeStreamContext();
+      }
+
+      if (!streamContext?.channelId || !streamContext?.startedAt) {
+        apiDebug.lastSkippedReason = "投稿時刻補正: 配信情報なし";
+        return;
+      }
+
+      const windows = new Set();
+      for (const candidate of candidates) {
+        for (let index = 0; index < TIMESTAMP_CORRECTION_LOOKBACK_WINDOWS; index += 1) {
+          const start = Math.max(streamContext.startedAt, candidate.observedAt - (index * API_WINDOW_MS));
+          windows.add(Math.floor(start / API_WINDOW_MS) * API_WINDOW_MS);
+        }
+      }
+
+      apiDebug.timestampCorrectionAttempts += 1;
+      for (const windowStart of [...windows].sort((a, b) => a - b)) {
+        await fetchChatWindow(windowStart, { force: true });
+      }
+    } catch (_error) {
+      apiDebug.lastSkippedReason = "投稿時刻補正エラー";
+    } finally {
+      lastTimestampCorrectionAt = Date.now();
+      timestampCorrectionRunning = false;
+      pruneTimestampCorrectionQueue();
+
+      if ([...pendingTimestampCorrections.values()].some((candidate) => candidate.attempts < TIMESTAMP_CORRECTION_MAX_ATTEMPTS)) {
+        scheduleTimestampCorrection(TIMESTAMP_CORRECTION_MIN_INTERVAL_MS);
+      }
+    }
+  }
+
+  function pruneTimestampCorrectionQueue() {
+    for (const [key, candidate] of pendingTimestampCorrections.entries()) {
+      if (candidate.attempts >= TIMESTAMP_CORRECTION_MAX_ATTEMPTS || !hasObservedMessage(candidate)) {
+        pendingTimestampCorrections.delete(key);
+      }
+    }
+  }
+
+  function hasObservedMessage(candidate) {
+    const history = userHistory.get(normalizeUsername(candidate.username));
+    if (!history?.messages?.length) return false;
+
+    return history.messages.some((message) => {
+      return message.text === candidate.text &&
+        getMessageTimestampKind(message) === "observed" &&
+        Math.abs(message.timestamp - candidate.observedAt) < 10 * 60 * 1000;
+    });
   }
 
   async function backfillUserHistory(username) {
@@ -2239,9 +2375,12 @@
   window.addEventListener("pagehide", () => {
     clearTimeout(saveTimer);
     clearTimeout(hideTimer);
+    clearTimeout(timestampCorrectionTimer);
+    timestampCorrectionTimer = 0;
     clearSavedHistory();
     if (scanInterval) window.clearInterval(scanInterval);
     if (pinnedApiInterval) window.clearInterval(pinnedApiInterval);
+    pendingTimestampCorrections.clear();
     observer.disconnect();
   }, { once: true });
 

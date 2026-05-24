@@ -2,6 +2,8 @@
 
 KICK Log Toolは、Kick.comのチャット欄でユーザー名にカーソルを置くと、そのユーザーの直近コメント履歴を表示するChrome拡張機能です。
 
+[ZIPファイルをダウンロード](https://github.com/benicnst/KICK-Log-Tool/archive/refs/heads/main.zip)
+
 KICK Log Tool is a Chrome extension that shows recent chat history for a Kick.com chat user when you hover over their username.
 
 This project is not affiliated with, endorsed by, or sponsored by Kick.

@@ -6,7 +6,7 @@
   const MAX_PINNED_POPOVERS = 3;
   const SAVE_DELAY_MS = 700;
   const API_WINDOW_MS = 60 * 1000;
-  const MAX_API_WINDOWS_PER_USER = 60;
+  const MAX_API_WINDOWS_PER_USER = 240;
   const API_ORIGIN = "https://kick.com";
   const BASE_STORAGE_KEY = `kch:${location.hostname}:${location.pathname.split("/").filter(Boolean)[0] || "home"}`;
   const MODERATION_ACTIONS_STORAGE_KEY = "klt:moderationActionsEnabled";
@@ -808,7 +808,7 @@
   const popover = createPopover();
 
   window.__KICK_CHAT_HISTORY_HOVER__ = {
-    version: "2.37.0",
+    version: "2.38.0",
     getChatRootCount: () => getChatRoots().length,
     getKnownUsers: () => [...userHistory.values()].map((value) => ({
       username: value.displayName,
@@ -941,7 +941,7 @@
         list.appendChild(item);
       }
 
-      if (messages.length < MAX_MESSAGES && state?.loading) {
+      if (state?.loading) {
         const loading = document.createElement("div");
         loading.className = "kch-popover__loading-more";
         loading.innerHTML = `
@@ -1993,13 +1993,11 @@
       return;
     }
 
-    const existing = userHistory.get(key);
-    if ((existing?.messages?.length || 0) >= MAX_MESSAGES) return;
-
     const currentState = userBackfillState.get(key);
     const now = Date.now();
     if (currentState?.loading) return;
-    if ((currentState?.done || currentState?.failed) && now - (currentState.lastAttemptAt || 0) < BACKFILL_RETRY_MS) return;
+    if (currentState?.done) return;
+    if (currentState?.failed && now - (currentState.lastAttemptAt || 0) < BACKFILL_RETRY_MS) return;
 
     userBackfillState.set(key, {
       loading: true,
@@ -2012,14 +2010,15 @@
 
     try {
       const beforeCount = userHistory.get(key)?.messages?.length || 0;
-      await fetchUserWindows(username);
+      const result = await fetchUserWindows(username);
       const messages = userHistory.get(key)?.messages || [];
       const addedCount = Math.max(0, messages.length - beforeCount);
+      const done = result.exhausted || (messages.length >= MAX_MESSAGES && result.foundOlderThanBaseline);
       userBackfillState.set(key, {
         loading: false,
         failed: false,
-        done: messages.length >= MAX_MESSAGES,
-        reason: addedCount ? "" : "API内に該当コメントなし",
+        done,
+        reason: addedCount || result.foundOlderThanBaseline ? "" : "API内に該当コメントなし",
         lastAttemptAt: Date.now()
       });
     } catch (_error) {
@@ -2039,23 +2038,52 @@
     const key = normalizeUsername(username);
     const now = Date.now();
     const streamStart = streamContext.startedAt;
+    const baselineOldest = getOldestUserTimestamp(key) || now;
     let windowStart = Math.max(streamStart, now - API_WINDOW_MS);
-    let exhausted = true;
+    let foundOlderThanBaseline = false;
 
     for (let index = 0; index < MAX_API_WINDOWS_PER_USER && windowStart >= streamStart; index += 1) {
-      await fetchChatWindow(windowStart, { force: index < PINNED_API_LOOKBACK_WINDOWS });
+      const apiMessages = await fetchChatWindow(windowStart, { force: index < PINNED_API_LOOKBACK_WINDOWS });
+      if (hasOlderApiMessageForUser(apiMessages, key, baselineOldest)) {
+        foundOlderThanBaseline = true;
+      }
 
       const messages = userHistory.get(key)?.messages || [];
-      if (messages.length >= MAX_MESSAGES) return;
+      if (messages.length >= MAX_MESSAGES && foundOlderThanBaseline) {
+        return {
+          exhausted: false,
+          foundOlderThanBaseline
+        };
+      }
 
-      if (windowStart === streamStart) return;
+      if (windowStart === streamStart) {
+        return {
+          exhausted: true,
+          foundOlderThanBaseline
+        };
+      }
       windowStart = Math.max(streamStart, windowStart - API_WINDOW_MS);
-      exhausted = index + 1 >= MAX_API_WINDOWS_PER_USER;
     }
 
-    if (exhausted) {
-      apiDebug.lastSkippedReason = "API探索上限";
-    }
+    apiDebug.lastSkippedReason = "API探索上限";
+    return {
+      exhausted: true,
+      foundOlderThanBaseline
+    };
+  }
+
+  function getOldestUserTimestamp(key) {
+    const messages = userHistory.get(key)?.messages || [];
+    if (!messages.length) return 0;
+    return Math.min(...messages.map((message) => message.timestamp || Date.now()));
+  }
+
+  function hasOlderApiMessageForUser(messages, key, baselineOldest) {
+    return messages.some((message) => {
+      if (normalizeUsername(getApiMessageUsername(message)) !== key) return false;
+      const timestamp = getApiMessageTimestamp(message);
+      return timestamp && timestamp < baselineOldest - 1000;
+    });
   }
 
   function updatePinnedApiRefresh() {
@@ -2125,7 +2153,7 @@
   async function fetchChatWindow(windowStart, options = {}) {
     const roundedStart = Math.floor(windowStart / API_WINDOW_MS) * API_WINDOW_MS;
     const cacheKey = `${streamContext.channelId}:${roundedStart}`;
-    if (!options.force && apiWindowCache.has(cacheKey)) return;
+    if (!options.force && apiWindowCache.has(cacheKey)) return [];
 
     const startTime = formatKickApiTime(roundedStart);
     const url = `${API_ORIGIN}/api/v2/channels/${encodeURIComponent(streamContext.channelId)}/messages?start_time=${encodeURIComponent(startTime)}`;
@@ -2150,6 +2178,7 @@
       if (rememberApiMessage(message)) acceptedCount += 1;
     }
     apiDebug.lastAcceptedMessageCount = acceptedCount;
+    return messages;
   }
 
   function describeApiResponseShape(data) {

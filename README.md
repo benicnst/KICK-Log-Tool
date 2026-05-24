@@ -117,13 +117,14 @@ window.__KICK_CHAT_HISTORY_HOVER__.setModerationActionsEnabled(false)
 
 Kickには、この用途向けの安定した公開チャット履歴APIはありません。この拡張機能は、以下の場合に限定して非公式エンドポイントを使用します。
 
-- ローカルで取得済みの履歴が20件未満の場合の履歴補完。
+- 同一配信内の過去履歴補完。
 - リアルタイム取得したコメントの投稿時刻補正。
 - チャットがスクロールで一時停止している間の固定ユーザー確認。
 
 不要な負荷を避けるため、APIアクセスは制限しています。
 
-- ホバー時の履歴補完は必要な場合のみ実行します。
+- ホバー時の履歴補完は、そのユーザーのAPI探索が未完了の場合のみ実行します。
+- 履歴補完の探索範囲は最大240分、または同一配信の開始時刻までです。
 - 固定ユーザー確認はチャット一時停止中のみ約15秒間隔で実行します。
 - チャット一時停止を解除すると、固定ユーザー確認のAPI使用を停止します。
 
@@ -249,13 +250,14 @@ window.__KICK_CHAT_HISTORY_HOVER__.setModerationActionsEnabled(false)
 
 Kick does not provide a stable public chat-history API for this use case. This extension uses limited unofficial endpoints for:
 
-- Backfilling missing recent history when local captured history is under 20 comments.
+- Backfilling previous history within the same stream.
 - Correcting posting times for realtime-captured comments.
 - Checking pinned users while the Kick chat is paused because of scrolling.
 
 API access is intentionally limited to reduce unnecessary load:
 
-- Hover backfill is attempted only when needed.
+- Hover backfill is attempted only when API search for that user has not completed.
+- Backfill search is capped at 240 minutes or the start time of the same stream.
 - Pinned-user API checks run about every 15 seconds only while chat pause is detected.
 - Pinned-user checks stop using the API once chat pause is released.
 

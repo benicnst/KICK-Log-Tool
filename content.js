@@ -673,7 +673,7 @@
   const popover = createPopover();
 
   window.__KICK_CHAT_HISTORY_HOVER__ = {
-    version: "2.29.0",
+    version: "2.30.0",
     getChatRootCount: () => getChatRoots().length,
     getKnownUsers: () => [...userHistory.values()].map((value) => ({
       username: value.displayName,
@@ -1553,6 +1553,14 @@
     }
   }
 
+  function clearSavedHistory() {
+    try {
+      window.localStorage.removeItem(storageKey);
+    } catch (_error) {
+      // Storage can be unavailable in restricted frames.
+    }
+  }
+
   async function initializeStreamContext() {
     const slug = getChannelSlug();
     apiDebug.contextAttempts += 1;
@@ -1984,8 +1992,11 @@
   window.addEventListener("pagehide", () => {
     clearTimeout(saveTimer);
     clearTimeout(hideTimer);
+    clearSavedHistory();
     if (scanInterval) window.clearInterval(scanInterval);
     if (pinnedApiInterval) window.clearInterval(pinnedApiInterval);
     observer.disconnect();
   }, { once: true });
+
+  window.addEventListener("beforeunload", clearSavedHistory);
 })();

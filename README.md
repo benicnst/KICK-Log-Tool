@@ -105,6 +105,7 @@ window.__KICK_CHAT_HISTORY_HOVER__.setModerationActionsEnabled(false)
 - このプロジェクトが管理する外部サーバーは使いません。
 - 取得したチャット履歴は外部サーバーへ送信しません。
 - ページを開いている間だけKickページ側の`localStorage`へ一時保存し、ページを閉じる時に削除します。
+- 履歴補完やチャット一時停止中の固定ユーザー確認のため、KickのAPIへ通信する場合があります。
 - ユーザーごとの履歴は設定された最大件数までに制限されます。
 - ログイントークンや個人情報の入力は不要です。
 
@@ -231,6 +232,7 @@ window.__KICK_CHAT_HISTORY_HOVER__.setModerationActionsEnabled(false)
 - The extension does not use an external server controlled by this project.
 - Captured chat history is not sent to an external server.
 - It is temporarily stored in the Kick page's `localStorage` while the page is open and cleared when the page is closed.
+- The extension may communicate with Kick APIs for history backfill and pinned-user checks while chat is paused.
 - History is limited to the configured maximum number of messages per user.
 - The extension does not require a login token or any user-provided personal information.
 

@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const MAX_MESSAGES = 10;
+  const MAX_MESSAGES = 20;
   const MAX_USERS = 250;
   const MAX_PINNED_POPOVERS = 3;
   const SAVE_DELAY_MS = 700;
@@ -673,7 +673,7 @@
   const popover = createPopover();
 
   window.__KICK_CHAT_HISTORY_HOVER__ = {
-    version: "2.28.0",
+    version: "2.29.0",
     getChatRootCount: () => getChatRoots().length,
     getKnownUsers: () => [...userHistory.values()].map((value) => ({
       username: value.displayName,

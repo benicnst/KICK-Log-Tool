@@ -577,7 +577,8 @@
       existing.messages.unshift({
         id: messageId,
         text,
-        timestamp
+        timestamp,
+        source: messageId ? "api" : "dom"
       });
       existing.messages.sort((a, b) => b.timestamp - a.timestamp);
       existing.messages = existing.messages.slice(0, MAX_MESSAGES);
@@ -682,7 +683,7 @@
   const popover = createPopover();
 
   window.__KICK_CHAT_HISTORY_HOVER__ = {
-    version: "2.32.0",
+    version: "2.33.0",
     getChatRootCount: () => getChatRoots().length,
     getKnownUsers: () => [...userHistory.values()].map((value) => ({
       username: value.displayName,
@@ -1263,7 +1264,8 @@
       .filter((message) => message?.text && message?.timestamp)
       .map((message) => ({
         text: normalizeMessageForRisk(message.text),
-        timestamp: message.timestamp
+        timestamp: message.timestamp,
+        source: message.source || (message.id ? "api" : "dom")
       }))
       .filter((message) => message.text);
 
@@ -1275,7 +1277,13 @@
     }
 
     const reasons = [];
-    const sorted = [...normalizedMessages].sort((a, b) => b.timestamp - a.timestamp);
+    const sorted = dedupeRiskMessages(normalizedMessages).sort((a, b) => b.timestamp - a.timestamp);
+    if (sorted.length < 4) {
+      return {
+        suspicious: false,
+        reasons: []
+      };
+    }
     const newest = sorted[0]?.timestamp || 0;
     const recent60s = sorted.filter((message) => newest - message.timestamp <= 60000);
     const recent120s = sorted.filter((message) => newest - message.timestamp <= 120000);
@@ -1320,6 +1328,23 @@
     };
   }
 
+  function dedupeRiskMessages(messages) {
+    const deduped = [];
+
+    for (const message of [...messages].sort((a, b) => a.timestamp - b.timestamp)) {
+      const nearDuplicate = deduped.some((existing) => {
+        const sameText = existing.text === message.text;
+        const sameBatch = Math.abs(existing.timestamp - message.timestamp) <= 1000;
+        const apiInvolved = existing.source === "api" || message.source === "api";
+        return sameText && sameBatch && apiInvolved;
+      });
+
+      if (!nearDuplicate) deduped.push(message);
+    }
+
+    return deduped;
+  }
+
   function normalizeMessageForRisk(text) {
     return cleanText(text)
       .toLowerCase()
@@ -1330,12 +1355,34 @@
   }
 
   function hasBurstWindow(sortedMessages, requiredCount, windowMs) {
+    if (hasLikelyApiBatch(sortedMessages, requiredCount, windowMs)) return false;
+
     for (let start = 0; start < sortedMessages.length; start += 1) {
       let count = 1;
       for (let end = start + 1; end < sortedMessages.length; end += 1) {
         const delta = Math.abs(sortedMessages[start].timestamp - sortedMessages[end].timestamp);
         if (delta <= windowMs) count += 1;
         if (count >= requiredCount) return true;
+      }
+    }
+
+    return false;
+  }
+
+  function hasLikelyApiBatch(sortedMessages, requiredCount, windowMs) {
+    for (let start = 0; start < sortedMessages.length; start += 1) {
+      const batch = [sortedMessages[start]];
+      for (let end = start + 1; end < sortedMessages.length; end += 1) {
+        const delta = Math.abs(sortedMessages[start].timestamp - sortedMessages[end].timestamp);
+        if (delta <= windowMs) batch.push(sortedMessages[end]);
+      }
+
+      if (
+        batch.length >= requiredCount &&
+        batch.some((message) => message.source === "api") &&
+        new Set(batch.map((message) => message.text)).size >= requiredCount
+      ) {
+        return true;
       }
     }
 
@@ -1566,6 +1613,10 @@
         messages: value.messages
           .filter((message) => message?.text && message?.timestamp)
           .filter((message) => !streamContext?.startedAt || message.timestamp >= streamContext.startedAt)
+          .map((message) => ({
+            ...message,
+            source: message.source || (message.id ? "api" : "dom")
+          }))
           .slice(0, MAX_MESSAGES)
       });
     }

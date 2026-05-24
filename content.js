@@ -13,6 +13,7 @@
   const HOVER_GRACE_MS = 2200;
   const PINNED_API_REFRESH_MS = 15 * 1000;
   const PINNED_API_LOOKBACK_WINDOWS = 2;
+  const BACKFILL_RETRY_MS = 45 * 1000;
   const CHAT_PAUSED_PATTERNS = [
     "スクロールのためにチャットが一時停止",
     "チャットが一時停止",
@@ -32,6 +33,8 @@
     lastUrl: "",
     lastStatus: "",
     lastMessageCount: 0,
+    lastAcceptedMessageCount: 0,
+    lastResponseShape: "",
     apiMessagesRemembered: 0,
     lastSkippedReason: ""
   };
@@ -670,7 +673,7 @@
   const popover = createPopover();
 
   window.__KICK_CHAT_HISTORY_HOVER__ = {
-    version: "2.27.0",
+    version: "2.28.0",
     getChatRootCount: () => getChatRoots().length,
     getKnownUsers: () => [...userHistory.values()].map((value) => ({
       username: value.displayName,
@@ -689,6 +692,11 @@
       apiDebug
     }),
     backfillUser: backfillUserHistory,
+    retryBackfill: (username) => {
+      userBackfillState.delete(normalizeUsername(username));
+      return backfillUserHistory(username);
+    },
+    getBackfillState: (username) => userBackfillState.get(normalizeUsername(username)) || null,
     scanNow: scanPage,
     setModerationActionsEnabled: (enabled) => {
       setModerationActionsEnabled(Boolean(enabled));
@@ -771,6 +779,8 @@
       empty.className = "kch-popover__empty";
       const message = state?.failed
         ? `APIから取得できませんでした。${state.reason ? ` (${state.reason})` : ""}`
+        : state?.reason && !state?.loading
+          ? state.reason
         : "コメント履歴を読み込み中...";
       empty.innerHTML = `
         <span class="kch-popover__spinner" aria-hidden="true"></span>
@@ -1591,6 +1601,10 @@
   function parseKickDate(value) {
     if (!value) return 0;
     if (typeof value === "number") return value > 1000000000000 ? value : value * 1000;
+    if (/^\d+$/.test(String(value).trim())) {
+      const numeric = Number(value);
+      return numeric > 1000000000000 ? numeric : numeric * 1000;
+    }
 
     const normalized = String(value).includes("T")
       ? String(value)
@@ -1624,31 +1638,38 @@
     if ((existing?.messages?.length || 0) >= MAX_MESSAGES) return;
 
     const currentState = userBackfillState.get(key);
-    if (currentState?.loading || currentState?.done || currentState?.failed) return;
+    const now = Date.now();
+    if (currentState?.loading) return;
+    if ((currentState?.done || currentState?.failed) && now - (currentState.lastAttemptAt || 0) < BACKFILL_RETRY_MS) return;
 
     userBackfillState.set(key, {
       loading: true,
       failed: false,
       done: false,
-      reason: ""
+      reason: "",
+      lastAttemptAt: now
     });
     refreshActivePopover(key);
 
     try {
+      const beforeCount = userHistory.get(key)?.messages?.length || 0;
       await fetchUserWindows(username);
       const messages = userHistory.get(key)?.messages || [];
+      const addedCount = Math.max(0, messages.length - beforeCount);
       userBackfillState.set(key, {
         loading: false,
         failed: false,
-        done: true,
-        reason: ""
+        done: messages.length >= MAX_MESSAGES,
+        reason: addedCount ? "" : "API内に該当コメントなし",
+        lastAttemptAt: Date.now()
       });
     } catch (_error) {
       userBackfillState.set(key, {
         loading: false,
         failed: true,
-        done: true,
-        reason: "APIエラー"
+        done: false,
+        reason: "APIエラー",
+        lastAttemptAt: Date.now()
       });
     }
 
@@ -1663,7 +1684,7 @@
     let exhausted = true;
 
     for (let index = 0; index < MAX_API_WINDOWS_PER_USER && windowStart >= streamStart; index += 1) {
-      await fetchChatWindow(windowStart);
+      await fetchChatWindow(windowStart, { force: index < PINNED_API_LOOKBACK_WINDOWS });
 
       const messages = userHistory.get(key)?.messages || [];
       if (messages.length >= MAX_MESSAGES) return;
@@ -1762,20 +1783,169 @@
     apiWindowCache.add(cacheKey);
 
     const data = await response.json();
-    const messages = data?.data?.messages || data?.messages || [];
+    apiDebug.lastResponseShape = describeApiResponseShape(data);
+    const messages = extractApiMessages(data);
     apiDebug.lastMessageCount = messages.length;
+    let acceptedCount = 0;
     for (const message of messages) {
-      rememberApiMessage(message);
+      if (rememberApiMessage(message)) acceptedCount += 1;
     }
+    apiDebug.lastAcceptedMessageCount = acceptedCount;
+  }
+
+  function describeApiResponseShape(data) {
+    if (Array.isArray(data)) return `array:${data.length}`;
+    if (!data || typeof data !== "object") return typeof data;
+
+    const keys = Object.keys(data).slice(0, 8).join(",");
+    const dataValue = data.data;
+    if (Array.isArray(dataValue)) return `object:${keys};data:array:${dataValue.length}`;
+    if (dataValue && typeof dataValue === "object") {
+      const dataKeys = Object.keys(dataValue).slice(0, 8).join(",");
+      return `object:${keys};data:object:${dataKeys}`;
+    }
+
+    return `object:${keys}`;
+  }
+
+  function extractApiMessages(data) {
+    const messages = [];
+    const seen = new WeakSet();
+
+    function visit(value, depth = 0) {
+      if (!value || depth > 8) return;
+
+      if (Array.isArray(value)) {
+        for (const item of value) {
+          visit(item, depth + 1);
+        }
+        return;
+      }
+
+      if (typeof value !== "object") return;
+      if (seen.has(value)) return;
+      seen.add(value);
+
+      if (looksLikeApiMessage(value)) {
+        messages.push(value);
+        return;
+      }
+
+      const preferredKeys = [
+        "messages",
+        "chat_messages",
+        "chatMessages",
+        "data",
+        "results",
+        "items",
+        "records"
+      ];
+
+      for (const key of preferredKeys) {
+        if (key in value) visit(value[key], depth + 1);
+      }
+
+      for (const [key, child] of Object.entries(value)) {
+        if (preferredKeys.includes(key)) continue;
+        if (Array.isArray(child) || (child && typeof child === "object")) {
+          visit(child, depth + 1);
+        }
+      }
+    }
+
+    visit(data);
+    return messages;
+  }
+
+  function looksLikeApiMessage(message) {
+    const username = getApiMessageUsername(message);
+    return Boolean(looksLikeUsername(username) && getApiMessageText(message) && getApiMessageTimestamp(message));
   }
 
   function rememberApiMessage(message) {
-    const username = message?.sender?.username || message?.user?.username || message?.username;
-    const text = cleanText(message?.content || message?.message || message?.text);
-    const timestamp = parseKickDate(message?.created_at || message?.date || message?.timestamp);
-    if (!username || !text || !timestamp) return;
-    rememberMessage(username, text, timestamp, message?.id || "");
+    const username = getApiMessageUsername(message);
+    const text = getApiMessageText(message);
+    const timestamp = getApiMessageTimestamp(message);
+    if (!username || !text || !timestamp) return false;
+    const remembered = rememberMessage(username, text, timestamp, getApiMessageId(message));
     apiDebug.apiMessagesRemembered += 1;
+    return remembered;
+  }
+
+  function getApiMessageUsername(message) {
+    return cleanText(
+      message?.sender?.username ||
+      message?.sender?.slug ||
+      message?.sender?.name ||
+      message?.user?.username ||
+      message?.user?.slug ||
+      message?.user?.name ||
+      message?.author?.username ||
+      message?.author?.slug ||
+      message?.author?.name ||
+      message?.account?.username ||
+      message?.account?.slug ||
+      message?.account?.name ||
+      message?.chatroom_user?.username ||
+      message?.chatroom_user?.slug ||
+      message?.chatroom_user?.name ||
+      message?.username ||
+      message?.user_name ||
+      message?.userName ||
+      message?.sender_username
+    ).replace(/^@/, "");
+  }
+
+  function getApiMessageText(message) {
+    return cleanText(
+      stringifyApiContent(
+        message?.content ??
+        message?.message ??
+        message?.text ??
+        message?.body ??
+        message?.comment
+      )
+    );
+  }
+
+  function stringifyApiContent(value) {
+    if (!value) return "";
+    if (typeof value === "string") return value;
+    if (typeof value === "number" || typeof value === "boolean") return String(value);
+
+    if (Array.isArray(value)) {
+      return value.map((item) => stringifyApiContent(item)).filter(Boolean).join(" ");
+    }
+
+    if (typeof value === "object") {
+      return stringifyApiContent(
+        value.text ??
+        value.message ??
+        value.content ??
+        value.body ??
+        value.value ??
+        value.name ??
+        ""
+      );
+    }
+
+    return "";
+  }
+
+  function getApiMessageTimestamp(message) {
+    return parseKickDate(
+      message?.created_at ||
+      message?.createdAt ||
+      message?.sent_at ||
+      message?.sentAt ||
+      message?.timestamp ||
+      message?.time ||
+      message?.date
+    );
+  }
+
+  function getApiMessageId(message) {
+    return String(message?.id || message?.message_id || message?.messageId || message?.uuid || "");
   }
 
   function formatKickApiTime(timestamp) {

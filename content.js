@@ -41,6 +41,7 @@
   const scannedRows = new WeakMap();
   let storageKey = BASE_STORAGE_KEY;
   let streamContext = null;
+  let activeChannelSlug = getChannelSlug();
   let saveTimer = 0;
   let activeRow = null;
   let activeUsername = "";
@@ -56,6 +57,7 @@
   let scanInterval = 0;
   let pinnedApiInterval = 0;
   let pinnedApiChecking = false;
+  let routeResetInProgress = false;
   let pinnedDragState = null;
   let popoverShownAt = 0;
 
@@ -632,8 +634,15 @@
   }
 
   function periodicRefresh() {
+    handlePossibleChannelChange();
     scanPage();
     closeStaleHoverPopover();
+  }
+
+  function handlePossibleChannelChange() {
+    const nextSlug = getChannelSlug();
+    if (!nextSlug || nextSlug === activeChannelSlug || routeResetInProgress) return;
+    resetForChannelChange(nextSlug);
   }
 
   function isChatPaused() {
@@ -673,7 +682,7 @@
   const popover = createPopover();
 
   window.__KICK_CHAT_HISTORY_HOVER__ = {
-    version: "2.30.0",
+    version: "2.31.0",
     getChatRootCount: () => getChatRoots().length,
     getKnownUsers: () => [...userHistory.values()].map((value) => ({
       username: value.displayName,
@@ -683,6 +692,7 @@
       chatRoots: getChatRoots().length,
       knownUsers: userHistory.size,
       activeRow: Boolean(activeRow),
+      activeChannelSlug,
       frame: window.top === window ? "top" : "child",
       streamContext,
       apiWindows: apiWindowCache.size,
@@ -1092,6 +1102,14 @@
     if (!card) return;
     card.element.remove();
     pinnedCards.delete(key);
+    updatePinnedApiRefresh();
+  }
+
+  function closeAllPinnedCards() {
+    for (const card of pinnedCards.values()) {
+      card.element.remove();
+    }
+    pinnedCards.clear();
     updatePinnedApiRefresh();
   }
 
@@ -1561,6 +1579,32 @@
     }
   }
 
+  async function resetForChannelChange(nextSlug) {
+    routeResetInProgress = true;
+    clearTimeout(saveTimer);
+    clearTimeout(hideTimer);
+    clearSavedHistory();
+
+    hidePopover();
+    closeAllPinnedCards();
+    userHistory.clear();
+    apiWindowCache.clear();
+    userBackfillState.clear();
+    pinnedApiCheckingUsers.clear();
+    pinnedApiChecking = false;
+    streamContext = null;
+    activeChannelSlug = nextSlug;
+    storageKey = `kch:${location.hostname}:${nextSlug}:route-pending`;
+
+    try {
+      await initializeStreamContext();
+      loadHistory();
+      scanPage();
+    } finally {
+      routeResetInProgress = false;
+    }
+  }
+
   async function initializeStreamContext() {
     const slug = getChannelSlug();
     apiDebug.contextAttempts += 1;
@@ -1596,6 +1640,7 @@
         startedAtIso: startedAt ? new Date(startedAt).toISOString() : "",
         isLive: Boolean(livestream?.is_live ?? channel.is_live)
       };
+      activeChannelSlug = slug;
       apiDebug.lastSkippedReason = "";
 
       const streamKey = streamContext.livestreamId || streamContext.startedAtIso || "current";
@@ -1984,6 +2029,27 @@
     }
   }
 
+  function installRouteChangeListeners() {
+    const notify = () => window.setTimeout(handlePossibleChannelChange, 0);
+    const originalPushState = history.pushState;
+    const originalReplaceState = history.replaceState;
+
+    history.pushState = function patchedPushState(...args) {
+      const result = originalPushState.apply(this, args);
+      notify();
+      return result;
+    };
+
+    history.replaceState = function patchedReplaceState(...args) {
+      const result = originalReplaceState.apply(this, args);
+      notify();
+      return result;
+    };
+
+    window.addEventListener("popstate", notify);
+  }
+
+  installRouteChangeListeners();
   initializeStreamContext().finally(() => loadHistory()).finally(() => {
     scanPage();
     scanInterval = window.setInterval(periodicRefresh, 2000);

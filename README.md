@@ -59,6 +59,8 @@ EdgeとBraveもChromium系ブラウザのため、未パッケージ拡張機能
 
 ドクロマークはBOTや連投ツールの使用を断定するものではありません。あくまで、投稿パターンが不自然な可能性を示す簡易的な目印です。
 
+投稿時刻がAPIまたはページ上の時刻情報から取得できたコメントだけを判定に使います。投稿時刻が取れないコメントは「取得」時刻として区別して表示し、ドクロマーク判定には使いません。
+
 以下の条件のうち、2つ以上に該当した場合のみドクロマークを表示します。
 
 - 60秒以内に5件以上コメントしている。
@@ -107,6 +109,7 @@ window.__KICK_CHAT_HISTORY_HOVER__.setModerationActionsEnabled(false)
 - ページを開いている間だけKickページ側の`localStorage`へ一時保存し、ページを閉じる時に削除します。
 - 履歴補完やチャット一時停止中の固定ユーザー確認のため、KickのAPIへ通信する場合があります。
 - ユーザーごとの履歴は設定された最大件数までに制限されます。
+- 投稿時刻が取得できないコメントは、取得時刻として区別して表示します。
 - ログイントークンや個人情報の入力は不要です。
 
 ### APIについて
@@ -186,6 +189,8 @@ Edge and Brave support unpacked Chromium extensions.
 
 The skull marker is not a definitive bot judgment. It is only a heuristic warning that an account may be using automation or rapid-posting behavior.
 
+Only comments with a posting time obtained from the Kick API or page timestamp data are used for this check. Comments without an available posting time are labeled as captured time and are excluded from skull-marker detection.
+
 The marker is shown only when 2 or more of these conditions are true:
 
 - 5 or more comments within 60 seconds.
@@ -234,6 +239,7 @@ window.__KICK_CHAT_HISTORY_HOVER__.setModerationActionsEnabled(false)
 - It is temporarily stored in the Kick page's `localStorage` while the page is open and cleared when the page is closed.
 - The extension may communicate with Kick APIs for history backfill and pinned-user checks while chat is paused.
 - History is limited to the configured maximum number of messages per user.
+- Comments without an available posting time are labeled as captured time.
 - The extension does not require a login token or any user-provided personal information.
 
 ### API Behavior

@@ -556,12 +556,23 @@
     return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
 
-  function rememberMessage(username, text, timestamp = Date.now(), messageId = "", source = "") {
+  function normalizeTimestampKind(value) {
+    return value === "posted" ? "posted" : "observed";
+  }
+
+  function getMessageTimestampKind(message) {
+    if (message?.timestampKind) return normalizeTimestampKind(message.timestampKind);
+    if (message?.source === "api" || message?.correctedTimestamp) return "posted";
+    return "observed";
+  }
+
+  function rememberMessage(username, text, timestamp = Date.now(), messageId = "", source = "", timestampKind = "") {
     const key = normalizeUsername(username);
     if (!key || !text) return false;
 
     if (streamContext?.startedAt && timestamp < streamContext.startedAt) return false;
     const messageSource = source || (messageId ? "api" : "dom");
+    const resolvedTimestampKind = normalizeTimestampKind(timestampKind || (messageSource === "api" ? "posted" : ""));
 
     const existing = userHistory.get(key) || {
       displayName: username,
@@ -573,7 +584,9 @@
       if (messageId && message.id === messageId) return true;
       if (message.text !== text) return false;
       if (Math.abs(message.timestamp - timestamp) < 2500) return true;
-      return messageSource === "api" && message.source === "dom" && Math.abs(message.timestamp - timestamp) < 10 * 60 * 1000;
+      return messageSource === "api" &&
+        getMessageTimestampKind(message) === "observed" &&
+        Math.abs(message.timestamp - timestamp) < 10 * 60 * 1000;
     });
 
     if (!duplicate) {
@@ -581,15 +594,18 @@
         id: messageId,
         text,
         timestamp,
-        source: messageSource
+        source: messageSource,
+        timestampKind: resolvedTimestampKind
       });
-    } else if (messageSource === "api" && duplicate.source === "dom") {
+    } else if (messageSource === "api" && getMessageTimestampKind(duplicate) === "observed") {
       duplicate.id = duplicate.id || messageId;
       duplicate.timestamp = timestamp;
       duplicate.source = "api";
+      duplicate.timestampKind = "posted";
       duplicate.correctedTimestamp = true;
     } else if (messageId && !duplicate.id) {
       duplicate.id = messageId;
+      duplicate.timestampKind = duplicate.timestampKind || getMessageTimestampKind(duplicate);
     }
 
     if (!duplicate || messageSource === "api") {
@@ -625,8 +641,10 @@
     if (scannedRows.get(row) === signature) return null;
     scannedRows.set(row, signature);
 
-    const timestamp = getDomMessageTimestamp(row) || Date.now();
-    rememberMessage(user.username, messageText, timestamp, "", "dom");
+    const postedTimestamp = getDomMessageTimestamp(row);
+    const timestamp = postedTimestamp || Date.now();
+    const timestampKind = postedTimestamp ? "posted" : "observed";
+    rememberMessage(user.username, messageText, timestamp, "", postedTimestamp ? "dom" : "observed", timestampKind);
 
     return {
       ...user,
@@ -754,7 +772,7 @@
   const popover = createPopover();
 
   window.__KICK_CHAT_HISTORY_HOVER__ = {
-    version: "2.34.0",
+    version: "2.35.0",
     getChatRootCount: () => getChatRoots().length,
     getKnownUsers: () => [...userHistory.values()].map((value) => ({
       username: value.displayName,
@@ -877,7 +895,7 @@
 
         const meta = document.createElement("div");
         meta.className = "kch-popover__meta";
-        meta.textContent = formatTime(message.timestamp);
+        renderMessageTime(meta, message);
 
         const text = document.createElement("div");
         text.className = "kch-popover__text";
@@ -1330,9 +1348,30 @@
     }).format(new Date(timestamp));
   }
 
+  function renderMessageTime(meta, message) {
+    if (getMessageTimestampKind(message) === "posted") {
+      meta.textContent = formatTime(message.timestamp);
+      meta.title = message.source === "api" ? "APIから取得した投稿時刻" : "ページ上から取得した投稿時刻";
+      return;
+    }
+
+    meta.classList.add("kch-popover__meta--observed");
+    meta.title = "投稿時刻が取得できないため、取得時刻を表示しています。ドクロ判定には使いません。";
+
+    const label = document.createElement("span");
+    label.className = "kch-popover__meta-label";
+    label.textContent = "取得";
+
+    const time = document.createElement("span");
+    time.textContent = formatTime(message.timestamp);
+
+    meta.append(label, time);
+  }
+
   function assessAccountRisk(messages) {
     const normalizedMessages = messages
       .filter((message) => message?.text && message?.timestamp)
+      .filter((message) => getMessageTimestampKind(message) === "posted")
       .map((message) => ({
         text: normalizeMessageForRisk(message.text),
         timestamp: message.timestamp,
@@ -1687,6 +1726,7 @@
           .map((message) => ({
             ...message,
             source: message.source || (message.id ? "api" : "dom"),
+            timestampKind: message.timestampKind || (message.source === "api" || message.correctedTimestamp ? "posted" : "observed"),
             correctedTimestamp: Boolean(message.correctedTimestamp)
           }))
           .slice(0, MAX_MESSAGES)
@@ -2043,7 +2083,7 @@
     const text = getApiMessageText(message);
     const timestamp = getApiMessageTimestamp(message);
     if (!username || !text || !timestamp) return false;
-    const remembered = rememberMessage(username, text, timestamp, getApiMessageId(message), "api");
+    const remembered = rememberMessage(username, text, timestamp, getApiMessageId(message), "api", "posted");
     apiDebug.apiMessagesRemembered += 1;
     return remembered;
   }

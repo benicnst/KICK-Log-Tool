@@ -183,6 +183,19 @@
   white-space: nowrap;
 }
 
+.kch-popover__meta--observed {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  color: #aeb8c2;
+  line-height: 1.15;
+}
+
+.kch-popover__meta-label {
+  color: #ffd166;
+  font-size: 10px;
+}
+
 .kch-popover__text {
   overflow-wrap: anywhere;
   color: #f2f5f7;

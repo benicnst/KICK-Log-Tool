@@ -556,11 +556,12 @@
     return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
 
-  function rememberMessage(username, text, timestamp = Date.now(), messageId = "") {
+  function rememberMessage(username, text, timestamp = Date.now(), messageId = "", source = "") {
     const key = normalizeUsername(username);
     if (!key || !text) return false;
 
     if (streamContext?.startedAt && timestamp < streamContext.startedAt) return false;
+    const messageSource = source || (messageId ? "api" : "dom");
 
     const existing = userHistory.get(key) || {
       displayName: username,
@@ -568,9 +569,11 @@
     };
 
     existing.displayName = username;
-    const duplicate = existing.messages.some((message) => {
+    const duplicate = existing.messages.find((message) => {
       if (messageId && message.id === messageId) return true;
-      return message.text === text && Math.abs(message.timestamp - timestamp) < 2500;
+      if (message.text !== text) return false;
+      if (Math.abs(message.timestamp - timestamp) < 2500) return true;
+      return messageSource === "api" && message.source === "dom" && Math.abs(message.timestamp - timestamp) < 10 * 60 * 1000;
     });
 
     if (!duplicate) {
@@ -578,8 +581,18 @@
         id: messageId,
         text,
         timestamp,
-        source: messageId ? "api" : "dom"
+        source: messageSource
       });
+    } else if (messageSource === "api" && duplicate.source === "dom") {
+      duplicate.id = duplicate.id || messageId;
+      duplicate.timestamp = timestamp;
+      duplicate.source = "api";
+      duplicate.correctedTimestamp = true;
+    } else if (messageId && !duplicate.id) {
+      duplicate.id = messageId;
+    }
+
+    if (!duplicate || messageSource === "api") {
       existing.messages.sort((a, b) => b.timestamp - a.timestamp);
       existing.messages = existing.messages.slice(0, MAX_MESSAGES);
     }
@@ -588,7 +601,7 @@
     userHistory.set(key, existing);
     pruneUsers();
     scheduleSave();
-    if (!duplicate) refreshActivePopover(key);
+    if (!duplicate || messageSource === "api") refreshActivePopover(key);
     return !duplicate;
   }
 
@@ -612,12 +625,70 @@
     if (scannedRows.get(row) === signature) return null;
     scannedRows.set(row, signature);
 
-    rememberMessage(user.username, messageText);
+    const timestamp = getDomMessageTimestamp(row) || Date.now();
+    rememberMessage(user.username, messageText, timestamp, "", "dom");
 
     return {
       ...user,
-      messageText
+      messageText,
+      timestamp
     };
+  }
+
+  function getDomMessageTimestamp(row) {
+    if (!row || row.nodeType !== Node.ELEMENT_NODE) return 0;
+
+    const selectors = [
+      "time[datetime]",
+      "[datetime]",
+      "[data-created-at]",
+      "[data-created-at-time]",
+      "[data-timestamp]",
+      "[data-time]",
+      "[data-sent-at]",
+      "[data-created]"
+    ];
+
+    for (const selector of selectors) {
+      const element = row.matches?.(selector) ? row : row.querySelector?.(selector);
+      const timestamp = getTimestampFromElement(element);
+      if (timestamp) return timestamp;
+    }
+
+    for (const element of [row, ...row.querySelectorAll?.("*") || []]) {
+      const timestamp = getTimestampFromElement(element);
+      if (timestamp) return timestamp;
+    }
+
+    return 0;
+  }
+
+  function getTimestampFromElement(element) {
+    if (!element || element.nodeType !== Node.ELEMENT_NODE) return 0;
+
+    const attributes = [
+      "datetime",
+      "data-created-at",
+      "data-created-at-time",
+      "data-timestamp",
+      "data-time",
+      "data-sent-at",
+      "data-created",
+      "data-message-created-at"
+    ];
+
+    for (const attribute of attributes) {
+      const timestamp = parseKickDate(element.getAttribute(attribute));
+      if (timestamp) return timestamp;
+    }
+
+    const tagName = element.tagName?.toLowerCase();
+    if (tagName === "time" || tagName === "abbr") {
+      const timestamp = parseKickDate(element.getAttribute("title") || element.textContent);
+      if (timestamp) return timestamp;
+    }
+
+    return 0;
   }
 
   function scanPage() {
@@ -683,7 +754,7 @@
   const popover = createPopover();
 
   window.__KICK_CHAT_HISTORY_HOVER__ = {
-    version: "2.33.0",
+    version: "2.34.0",
     getChatRootCount: () => getChatRoots().length,
     getKnownUsers: () => [...userHistory.values()].map((value) => ({
       username: value.displayName,
@@ -1615,7 +1686,8 @@
           .filter((message) => !streamContext?.startedAt || message.timestamp >= streamContext.startedAt)
           .map((message) => ({
             ...message,
-            source: message.source || (message.id ? "api" : "dom")
+            source: message.source || (message.id ? "api" : "dom"),
+            correctedTimestamp: Boolean(message.correctedTimestamp)
           }))
           .slice(0, MAX_MESSAGES)
       });
@@ -1971,7 +2043,7 @@
     const text = getApiMessageText(message);
     const timestamp = getApiMessageTimestamp(message);
     if (!username || !text || !timestamp) return false;
-    const remembered = rememberMessage(username, text, timestamp, getApiMessageId(message));
+    const remembered = rememberMessage(username, text, timestamp, getApiMessageId(message), "api");
     apiDebug.apiMessagesRemembered += 1;
     return remembered;
   }
@@ -2042,7 +2114,18 @@
       message?.createdAt ||
       message?.sent_at ||
       message?.sentAt ||
+      message?.created ||
+      message?.created_time ||
+      message?.createdTime ||
+      message?.created_at_time ||
+      message?.createdAtTime ||
+      message?.updated_at ||
+      message?.updatedAt ||
       message?.timestamp ||
+      message?.timestamps?.created_at ||
+      message?.timestamps?.createdAt ||
+      message?.meta?.created_at ||
+      message?.meta?.createdAt ||
       message?.time ||
       message?.date
     );

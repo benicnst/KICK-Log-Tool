@@ -1,0 +1,233 @@
+.kch-popover {
+  position: fixed;
+  z-index: 2147483647;
+  width: min(244px, calc(100vw - 24px));
+  max-height: min(330px, calc(100vh - 24px));
+  overflow: hidden;
+  border: 1px solid rgba(83, 252, 24, 0.45);
+  border-radius: 8px;
+  background: rgba(17, 20, 24, 0.9);
+  color: #f2f5f7;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.38);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 13px;
+  line-height: 1.4;
+  pointer-events: auto;
+}
+
+.kch-popover[hidden] {
+  display: none;
+}
+
+.kch-popover__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: #171b20;
+}
+
+.kch-popover--pinned .kch-popover__header {
+  cursor: move;
+}
+
+.kch-popover--dragging {
+  user-select: none;
+}
+
+.kch-popover__name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  color: #53fc18;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kch-popover__risk {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: 1px solid rgba(255, 92, 92, 0.55);
+  border-radius: 50%;
+  background: rgba(255, 92, 92, 0.14);
+  color: #ff6b6b;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.kch-popover__refresh {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: #53fc18;
+  animation: kch-spin 0.9s linear infinite;
+}
+
+.kch-popover__refresh svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.kch-popover__actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.kch-popover__mod,
+.kch-popover__pin,
+.kch-popover__close {
+  height: 24px;
+  min-width: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #dbe3ea;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.kch-popover__mod {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.kch-popover__mod svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.kch-popover__mod--timeout {
+  color: #ffd166;
+}
+
+.kch-popover__mod--ban {
+  color: #ff6b6b;
+}
+
+.kch-popover__pin {
+  padding: 0 7px;
+}
+
+.kch-popover__close {
+  padding: 0;
+  font-size: 16px;
+}
+
+.kch-popover__mod:hover,
+.kch-popover__pin:hover,
+.kch-popover__close:hover {
+  border-color: rgba(83, 252, 24, 0.5);
+  background: rgba(83, 252, 24, 0.12);
+  color: #53fc18;
+}
+
+.kch-popover--pinned .kch-popover__pin {
+  border-color: rgba(83, 252, 24, 0.6);
+  background: rgba(83, 252, 24, 0.16);
+  color: #53fc18;
+  cursor: default;
+}
+
+.kch-popover__list {
+  max-height: 270px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 6px 0;
+}
+
+.kch-popover__item {
+  display: grid;
+  grid-template-columns: 74px minmax(0, 1fr);
+  align-items: start;
+  column-gap: 10px;
+  padding: 7px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.kch-popover__item:last-child {
+  border-bottom: 0;
+}
+
+.kch-popover__meta {
+  color: #98a2ad;
+  font-size: 11px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.kch-popover__text {
+  overflow-wrap: anywhere;
+  color: #f2f5f7;
+  text-align: right;
+}
+
+.kch-popover__empty {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 14px 12px;
+  color: #c5ccd3;
+}
+
+.kch-popover__loading-more {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px 10px;
+  color: #98a2ad;
+  font-size: 12px;
+}
+
+.kch-popover__notice {
+  margin: 6px 10px 8px;
+  padding: 7px 9px;
+  border: 1px solid rgba(83, 252, 24, 0.35);
+  border-radius: 6px;
+  background: rgba(83, 252, 24, 0.1);
+  color: #dfffd7;
+  font-size: 12px;
+}
+
+.kch-popover__spinner {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  border: 2px solid rgba(197, 204, 211, 0.28);
+  border-top-color: #53fc18;
+  border-radius: 50%;
+  animation: kch-spin 0.85s linear infinite;
+}
+
+@keyframes kch-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

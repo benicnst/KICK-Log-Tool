@@ -10,7 +10,9 @@
   const API_ORIGIN = "https://kick.com";
   const BASE_STORAGE_KEY = `kch:${location.hostname}:${location.pathname.split("/").filter(Boolean)[0] || "home"}`;
   const MODERATION_ACTIONS_STORAGE_KEY = "klt:moderationActionsEnabled";
-  const HOVER_GRACE_MS = 2200;
+  const HOVER_GRACE_MS = 450;
+  const HOVER_HIDE_DELAY_MS = 160;
+  const HOVER_BRIDGE_MARGIN = 6;
   const PINNED_API_REFRESH_MS = 15 * 1000;
   const PINNED_API_LOOKBACK_WINDOWS = 2;
   const BACKFILL_RETRY_MS = 45 * 1000;
@@ -21,6 +23,7 @@
   const TIMESTAMP_CORRECTION_MAX_ATTEMPTS = 3;
   const REALTIME_TIMESTAMP_TRUST_DELAY_MS = 8000;
   const REALTIME_TIMESTAMP_MAX_ROWS = 3;
+  const EMOTE_PLACEHOLDER = "[emote]";
   const CHAT_PAUSED_PATTERNS = [
     "スクロールのためにチャットが一時停止",
     "チャットが一時停止",
@@ -157,6 +160,7 @@
 
   function cleanText(value) {
     return String(value || "")
+      .replace(/[\u200B-\u200D\uFEFF]/g, "")
       .replace(/\s+/g, " ")
       .trim();
   }
@@ -538,17 +542,88 @@
   }
 
   function extractMessageText(row, username) {
-    const parsed = parseUsernameMessage(row);
-    if (parsed?.username && normalizeUsername(parsed.username) === normalizeUsername(username)) {
-      return parsed.message;
-    }
-
     const explicitMessage = row.querySelector(
       "[data-testid*='message' i], [class*='message' i], [class*='content' i], [dir='auto']"
     );
 
-    const sourceText = cleanText(explicitMessage?.textContent || row.innerText || row.textContent);
-    return removeUsernameFromText(sourceText, username);
+    if (explicitMessage) {
+      const richMessageText = normalizeMessageContent(removeUsernameFromText(getRichText(explicitMessage), username));
+      if (richMessageText) return richMessageText;
+    }
+
+    const parsed = parseUsernameMessage(row);
+    if (parsed?.username && normalizeUsername(parsed.username) === normalizeUsername(username)) {
+      const richParsedText = removeUsernameFromText(getRichText(row), username);
+      return normalizeMessageContent(richParsedText || parsed.message);
+    }
+
+    return normalizeMessageContent(removeUsernameFromText(getRichText(row), username));
+  }
+
+  function getRichText(root) {
+    if (!root || root.nodeType !== Node.ELEMENT_NODE) return cleanText(root?.textContent || "");
+
+    const parts = [];
+
+    function visit(node) {
+      if (node.nodeType === Node.TEXT_NODE) {
+        parts.push(node.textContent || "");
+        return;
+      }
+
+      if (node.nodeType !== Node.ELEMENT_NODE) return;
+      const element = node;
+      if (!isVisibleElement(element)) return;
+
+      const tagName = element.tagName?.toLowerCase();
+      if (tagName === "img" || tagName === "svg" || tagName === "picture") {
+        parts.push(getMediaText(element));
+        return;
+      }
+
+      if (element.getAttribute("role") === "img") {
+        parts.push(getMediaText(element));
+        return;
+      }
+
+      for (const child of element.childNodes) {
+        visit(child);
+      }
+    }
+
+    visit(root);
+    return cleanText(parts.filter(Boolean).join(" "));
+  }
+
+  function getMediaText(element) {
+    const label = cleanText(
+      element.getAttribute("alt") ||
+      element.getAttribute("aria-label") ||
+      element.getAttribute("title") ||
+      element.getAttribute("data-emote-name") ||
+      element.getAttribute("data-name") ||
+      element.getAttribute("data-tooltip") ||
+      ""
+    );
+
+    const normalized = normalizeEmoteLabel(label);
+    return normalized || EMOTE_PLACEHOLDER;
+  }
+
+  function normalizeEmoteLabel(value) {
+    const text = cleanText(value)
+      .replace(/^:|:$/g, "")
+      .replace(/^emote\s*:?\s*/i, "")
+      .replace(/^emoji\s*:?\s*/i, "");
+    if (!text) return "";
+    if (/^[a-f0-9-]{12,}$/i.test(text) || /^\d{4,}$/.test(text)) return EMOTE_PLACEHOLDER;
+    return `:${text}:`;
+  }
+
+  function normalizeMessageContent(value) {
+    return cleanText(value)
+      .replace(/(?:\[emote\]\s*){2,}/g, (match) => match.trim().replace(/\s+/g, " "))
+      .trim();
   }
 
   function removeUsernameFromText(text, username) {
@@ -817,7 +892,7 @@
   const popover = createPopover();
 
   window.__KICK_CHAT_HISTORY_HOVER__ = {
-    version: "2.45.0",
+    version: "2.46.0",
     getChatRootCount: () => getChatRoots().length,
     getKnownUsers: () => [...userHistory.values()].map((value) => ({
       username: value.displayName,
@@ -1029,16 +1104,16 @@
     popover.hidden = true;
   }
 
-  function scheduleHidePopover() {
+  function scheduleHidePopover(delay = HOVER_HIDE_DELAY_MS) {
     clearTimeout(hideTimer);
     hideTimer = window.setTimeout(() => {
       if (isPointerInsideActiveHoverZone()) return;
       if (Date.now() - popoverShownAt < HOVER_GRACE_MS) {
-        scheduleHidePopover();
+        scheduleHidePopover(HOVER_GRACE_MS - (Date.now() - popoverShownAt));
         return;
       }
       hidePopover();
-    }, 900);
+    }, Math.max(HOVER_HIDE_DELAY_MS, delay));
   }
 
   function closeStaleHoverPopover() {
@@ -1067,15 +1142,16 @@
 
   function isPointerInsidePopoverBridge() {
     if (popover.hidden || !activeAnchorRect) return false;
+    if (Date.now() - popoverShownAt > HOVER_GRACE_MS) return false;
 
     const popoverRect = popover.getBoundingClientRect();
     if (popoverRect.width <= 0 || popoverRect.height <= 0) return false;
 
     const sourceRect = activeRowRect || activeAnchorRect;
-    const left = Math.min(sourceRect.left, popoverRect.left) - 18;
-    const right = Math.max(sourceRect.right, popoverRect.right) + 18;
-    const top = Math.min(sourceRect.top, popoverRect.top) - 18;
-    const bottom = Math.max(sourceRect.bottom, popoverRect.bottom) + 18;
+    const left = Math.min(sourceRect.left, popoverRect.left) - HOVER_BRIDGE_MARGIN;
+    const right = Math.max(sourceRect.right, popoverRect.right) + HOVER_BRIDGE_MARGIN;
+    const top = Math.min(sourceRect.top, popoverRect.top) - HOVER_BRIDGE_MARGIN;
+    const bottom = Math.max(sourceRect.bottom, popoverRect.bottom) + HOVER_BRIDGE_MARGIN;
 
     return lastPointer.x >= left &&
       lastPointer.x <= right &&
@@ -2340,7 +2416,7 @@
   }
 
   function getApiMessageText(message) {
-    return cleanText(
+    return normalizeMessageContent(
       stringifyApiContent(
         message?.content ??
         message?.message ??
@@ -2361,6 +2437,17 @@
     }
 
     if (typeof value === "object") {
+      if (looksLikeApiEmote(value)) {
+        return normalizeEmoteLabel(
+          value.name ??
+          value.text ??
+          value.code ??
+          value.slug ??
+          value.label ??
+          ""
+        ) || EMOTE_PLACEHOLDER;
+      }
+
       return stringifyApiContent(
         value.text ??
         value.message ??
@@ -2373,6 +2460,12 @@
     }
 
     return "";
+  }
+
+  function looksLikeApiEmote(value) {
+    const type = cleanText(value?.type || value?.kind || value?.content_type || value?.contentType).toLowerCase();
+    if (type.includes("emote") || type.includes("emoji") || type.includes("sticker")) return true;
+    return Boolean(value?.emote || value?.emote_id || value?.emoteId || value?.emoji || value?.sticker);
   }
 
   function getApiMessageTimestamp(message) {

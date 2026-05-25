@@ -153,17 +153,13 @@
   align-items: center;
   justify-content: center;
   padding: 0;
-  color: #53fc18;
+  color: #ff2d1f;
 }
 
 .kch-popover__pin svg {
-  width: 17px;
-  height: 17px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2.25;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+  width: 20px;
+  height: 20px;
+  overflow: visible;
 }
 
 .kch-popover__close {

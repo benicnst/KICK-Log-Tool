@@ -24,6 +24,9 @@
   const REALTIME_TIMESTAMP_TRUST_DELAY_MS = 8000;
   const REALTIME_TIMESTAMP_MAX_ROWS = 3;
   const EMOTE_PLACEHOLDER = "[emote]";
+  const BACKFILL_WINDOW_OFFSETS_MINUTES = [
+    1, 2, 4, 8, 15, 30, 45, 60, 90, 120, 180, 240
+  ];
   const CHAT_PAUSED_PATTERNS = [
     "スクロールのためにチャットが一時停止",
     "チャットが一時停止",
@@ -892,7 +895,7 @@
   const popover = createPopover();
 
   window.__KICK_CHAT_HISTORY_HOVER__ = {
-    version: "2.46.0",
+    version: "2.47.0",
     getChatRootCount: () => getChatRoots().length,
     getKnownUsers: () => [...userHistory.values()].map((value) => ({
       username: value.displayName,
@@ -1035,7 +1038,7 @@
         loading.className = "kch-popover__loading-more";
         loading.innerHTML = `
           <span class="kch-popover__spinner" aria-hidden="true"></span>
-          <span>同一配信内の過去コメントを取得中...</span>
+          <span>過去コメントを取得中.</span>
         `;
         list.appendChild(loading);
       }
@@ -2165,10 +2168,11 @@
     const now = Date.now();
     const streamStart = streamContext.startedAt;
     const baselineOldest = getOldestUserTimestamp(key) || now;
-    let windowStart = Math.max(streamStart, now - API_WINDOW_MS);
     let foundOlderThanBaseline = false;
+    const windows = getBackfillWindowStarts(now, streamStart);
 
-    for (let index = 0; index < MAX_API_WINDOWS_PER_USER && windowStart >= streamStart; index += 1) {
+    for (let index = 0; index < windows.length; index += 1) {
+      const windowStart = windows[index];
       const apiMessages = await fetchChatWindow(windowStart, { force: index < PINNED_API_LOOKBACK_WINDOWS });
       if (hasOlderApiMessageForUser(apiMessages, key, baselineOldest)) {
         foundOlderThanBaseline = true;
@@ -2181,21 +2185,32 @@
           foundOlderThanBaseline
         };
       }
-
-      if (windowStart === streamStart) {
-        return {
-          exhausted: true,
-          foundOlderThanBaseline
-        };
-      }
-      windowStart = Math.max(streamStart, windowStart - API_WINDOW_MS);
     }
 
-    apiDebug.lastSkippedReason = "API探索上限";
     return {
       exhausted: true,
       foundOlderThanBaseline
     };
+  }
+
+  function getBackfillWindowStarts(now, streamStart) {
+    const windows = new Set();
+    const maxOffset = Math.min(
+      MAX_API_WINDOWS_PER_USER,
+      Math.max(1, Math.ceil((now - streamStart) / API_WINDOW_MS))
+    );
+
+    for (const offset of BACKFILL_WINDOW_OFFSETS_MINUTES) {
+      if (offset > maxOffset) continue;
+      windows.add(Math.floor(Math.max(streamStart, now - offset * API_WINDOW_MS) / API_WINDOW_MS) * API_WINDOW_MS);
+    }
+
+    windows.add(Math.floor(streamStart / API_WINDOW_MS) * API_WINDOW_MS);
+    windows.add(Math.floor(Math.max(streamStart, now - API_WINDOW_MS) / API_WINDOW_MS) * API_WINDOW_MS);
+
+    return [...windows]
+      .filter((timestamp) => timestamp >= streamStart && timestamp <= now)
+      .sort((a, b) => b - a);
   }
 
   function getOldestUserTimestamp(key) {

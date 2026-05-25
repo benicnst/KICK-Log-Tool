@@ -51,9 +51,15 @@
   align-items: center;
   gap: 6px;
   min-width: 0;
-  overflow: hidden;
   color: #53fc18;
   font-weight: 700;
+  white-space: nowrap;
+}
+
+.kch-popover__name-text {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -143,7 +149,21 @@
 
 .kch-popover__pin {
   flex: 0 0 auto;
-  padding: 0 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: #53fc18;
+}
+
+.kch-popover__pin svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .kch-popover__close {

@@ -817,7 +817,7 @@
   const popover = createPopover();
 
   window.__KICK_CHAT_HISTORY_HOVER__ = {
-    version: "2.41.0",
+    version: "2.42.0",
     getChatRootCount: () => getChatRoots().length,
     getKnownUsers: () => [...userHistory.values()].map((value) => ({
       username: value.displayName,
@@ -869,8 +869,10 @@
     targetPopover.innerHTML = `
       <div class="kch-popover__header">
         <div class="kch-popover__identity">
-          <div class="kch-popover__name"></div>
-          <button class="kch-popover__pin" type="button"></button>
+          <div class="kch-popover__name">
+            <span class="kch-popover__name-text"></span>
+            <button class="kch-popover__pin" type="button"></button>
+          </div>
         </div>
         <div class="kch-popover__actions">
           <button class="kch-popover__mod kch-popover__mod--timeout" type="button" title="10分タイムアウト command を入力"></button>
@@ -883,7 +885,7 @@
 
     const risk = assessAccountRisk(messages);
     const nameElement = targetPopover.querySelector(".kch-popover__name");
-    nameElement.textContent = displayName;
+    targetPopover.querySelector(".kch-popover__name-text").textContent = displayName;
     if (risk.suspicious) {
       const marker = document.createElement("span");
       marker.className = "kch-popover__risk";
@@ -906,8 +908,9 @@
       nameElement.appendChild(refresh);
     }
     const pinButton = targetPopover.querySelector(".kch-popover__pin");
-    pinButton.textContent = pinned ? "固定中" : "固定";
+    pinButton.innerHTML = getPinIcon(pinned);
     pinButton.title = pinned ? "固定済み" : "ピン留め";
+    pinButton.setAttribute("aria-label", pinned ? "固定済み" : "ピン留め");
     pinButton.disabled = pinned;
     targetPopover.classList.toggle("kch-popover--pinned", pinned);
     targetPopover.dataset.usernameKey = key;
@@ -1308,6 +1311,17 @@
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <circle cx="12" cy="12" r="8"></circle>
         <path d="M7 17 17 7"></path>
+      </svg>
+    `;
+  }
+
+  function getPinIcon(pinned) {
+    return `
+      <svg viewBox="0 0 24 24" aria-hidden="true" class="${pinned ? "kch-popover__pin-icon--active" : ""}">
+        <path d="M12 17v5"></path>
+        <path d="M5 17h14"></path>
+        <path d="M7 9h10"></path>
+        <path d="M9 9V4h6v5l2 4H7l2-4Z"></path>
       </svg>
     `;
   }

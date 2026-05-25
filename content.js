@@ -817,7 +817,7 @@
   const popover = createPopover();
 
   window.__KICK_CHAT_HISTORY_HOVER__ = {
-    version: "2.40.0",
+    version: "2.41.0",
     getChatRootCount: () => getChatRoots().length,
     getKnownUsers: () => [...userHistory.values()].map((value) => ({
       username: value.displayName,
@@ -868,11 +868,13 @@
 
     targetPopover.innerHTML = `
       <div class="kch-popover__header">
-        <div class="kch-popover__name"></div>
+        <div class="kch-popover__identity">
+          <div class="kch-popover__name"></div>
+          <button class="kch-popover__pin" type="button"></button>
+        </div>
         <div class="kch-popover__actions">
           <button class="kch-popover__mod kch-popover__mod--timeout" type="button" title="10分タイムアウト command を入力"></button>
           <button class="kch-popover__mod kch-popover__mod--ban" type="button" title="BAN command を入力"></button>
-          <button class="kch-popover__pin" type="button"></button>
           <button class="kch-popover__close" type="button" title="閉じる">×</button>
         </div>
       </div>
@@ -980,7 +982,7 @@
 
     const popoverRect = popover.getBoundingClientRect();
     const alignRect = getPopoverAlignmentRect(anchor) || rect;
-    let left = alignRect.right - popoverRect.width;
+    let left = alignRect.left;
     let top = rect.bottom + gap;
 
     if (left + popoverRect.width > window.innerWidth - margin) {

@@ -37,8 +37,17 @@
   user-select: none;
 }
 
+.kch-popover__identity {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
 .kch-popover__name {
   display: flex;
+  flex: 1 1 auto;
   align-items: center;
   gap: 6px;
   min-width: 0;
@@ -133,6 +142,7 @@
 }
 
 .kch-popover__pin {
+  flex: 0 0 auto;
   padding: 0 7px;
 }
 

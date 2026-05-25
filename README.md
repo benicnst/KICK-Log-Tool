@@ -20,6 +20,7 @@ This project is not affiliated with, endorsed by, or sponsored by Kick.
 - レイドなどで別チャンネルへ移動した場合、固定ポップアップと一時履歴を自動で閉じます。
 - 表示中または固定中のユーザーに新しいコメントが追加された場合、ポップアップ内容を更新します。
 - 通常の新着コメントはKickチャット欄のDOM監視でリアルタイム取得します。
+- 少数のコメントがリアルタイムに追加されたと判断できる場合、DOMに時刻が無くても取得時刻を投稿時刻として扱います。
 - チャット一時停止中のみ、固定中ユーザーの取りこぼしを減らすために限定的な非公式API確認を行います。
 - チャット一時停止を解除すると、API確認ではなくチャット表示欄のリアルタイム取得に戻ります。
 - API確認中は固定ユーザー名の横に回転するリロードマークを表示します。
@@ -60,7 +61,7 @@ EdgeとBraveもChromium系ブラウザのため、未パッケージ拡張機能
 
 ドクロマークはBOTや連投ツールの使用を断定するものではありません。あくまで、投稿パターンが不自然な可能性を示す簡易的な目印です。
 
-投稿時刻がAPIまたはページ上の時刻情報から取得できたコメントだけを判定に使います。投稿時刻が取れないコメントは「取得」時刻として区別して表示し、ドクロマーク判定には使いません。
+投稿時刻がAPI、ページ上の時刻情報、またはリアルタイム追加判定から取得できたコメントだけを判定に使います。投稿時刻が取れないコメントは「取得」時刻として区別して表示し、ドクロマーク判定には使いません。
 
 以下の条件のうち、2つ以上に該当した場合のみドクロマークを表示します。
 
@@ -163,6 +164,7 @@ GitHub Releaseには、`dist/KICK-Log-Tool.zip`をアップロードしてくだ
 - Automatically closes pinned popups and clears temporary history when moving to another channel, such as after a raid.
 - Updates visible and pinned popups when new comments are captured.
 - Uses Kick chat DOM observation for normal realtime updates.
+- Treats capture time as posting time when a small number of messages are clearly added in realtime without a DOM timestamp.
 - Uses a limited unofficial Kick chat API only while chat is paused, and only for pinned users.
 - Returns to DOM-based realtime capture after chat pause is released.
 - Shows a rotating reload icon next to pinned users while API checking is active.
@@ -203,7 +205,7 @@ Edge and Brave support unpacked Chromium extensions.
 
 The skull marker is not a definitive bot judgment. It is only a heuristic warning that an account may be using automation or rapid-posting behavior.
 
-Only comments with a posting time obtained from the Kick API or page timestamp data are used for this check. Comments without an available posting time are labeled as captured time and are excluded from skull-marker detection.
+Only comments with a posting time obtained from the Kick API, page timestamp data, or realtime-add detection are used for this check. Comments without an available posting time are labeled as captured time and are excluded from skull-marker detection.
 
 The marker is shown only when 2 or more of these conditions are true:
 

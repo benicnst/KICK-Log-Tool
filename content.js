@@ -19,6 +19,8 @@
   const TIMESTAMP_CORRECTION_LOOKBACK_WINDOWS = 2;
   const TIMESTAMP_CORRECTION_MAX_PENDING = 80;
   const TIMESTAMP_CORRECTION_MAX_ATTEMPTS = 3;
+  const REALTIME_TIMESTAMP_TRUST_DELAY_MS = 8000;
+  const REALTIME_TIMESTAMP_MAX_ROWS = 3;
   const CHAT_PAUSED_PATTERNS = [
     "スクロールのためにチャットが一時停止",
     "チャットが一時停止",
@@ -69,6 +71,7 @@
   let timestampCorrectionTimer = 0;
   let timestampCorrectionRunning = false;
   let lastTimestampCorrectionAt = 0;
+  let realtimeTimestampTrustReadyAt = Date.now() + REALTIME_TIMESTAMP_TRUST_DELAY_MS;
   let routeResetInProgress = false;
   let pinnedDragState = null;
   let popoverShownAt = 0;
@@ -665,7 +668,7 @@
     }
   }
 
-  function scanRow(row) {
+  function scanRow(row, options = {}) {
     if (!row) return null;
 
     const user = getUsernameData(row);
@@ -680,14 +683,18 @@
 
     const postedTimestamp = getDomMessageTimestamp(row);
     const timestamp = postedTimestamp || Date.now();
-    const timestampKind = postedTimestamp ? "posted" : "observed";
-    rememberMessage(user.username, messageText, timestamp, "", postedTimestamp ? "dom" : "observed", timestampKind);
-    if (!postedTimestamp) queueTimestampCorrection(user.username, messageText, timestamp);
+    const trustRealtimeTimestamp = !postedTimestamp && options.trustRealtimeTimestamp === true;
+    const timestampKind = postedTimestamp || trustRealtimeTimestamp ? "posted" : "observed";
+    const source = postedTimestamp ? "dom" : trustRealtimeTimestamp ? "realtime" : "observed";
+    rememberMessage(user.username, messageText, timestamp, "", source, timestampKind);
+    if (!postedTimestamp && !trustRealtimeTimestamp) queueTimestampCorrection(user.username, messageText, timestamp);
 
     return {
       ...user,
       messageText,
-      timestamp
+      timestamp,
+      timestampKind,
+      source
     };
   }
 
@@ -810,7 +817,7 @@
   const popover = createPopover();
 
   window.__KICK_CHAT_HISTORY_HOVER__ = {
-    version: "2.39.0",
+    version: "2.40.0",
     getChatRootCount: () => getChatRoots().length,
     getKnownUsers: () => [...userHistory.values()].map((value) => ({
       username: value.displayName,
@@ -1396,7 +1403,7 @@
   function renderMessageTime(meta, message) {
     if (getMessageTimestampKind(message) === "posted") {
       meta.textContent = formatTime(message.timestamp);
-      meta.title = message.source === "api" ? "APIから取得した投稿時刻" : "ページ上から取得した投稿時刻";
+      meta.title = getPostedTimeTitle(message);
       return;
     }
 
@@ -1404,6 +1411,12 @@
     meta.textContent = formatTime(message.timestamp);
     meta.title = "投稿時刻未確定。取得時刻を薄い斜線表示にしています。API照合で一致すれば投稿時刻に補正します。";
     meta.setAttribute("aria-label", `投稿時刻未確定。取得時刻 ${formatTime(message.timestamp)}`);
+  }
+
+  function getPostedTimeTitle(message) {
+    if (message.source === "api") return "APIから取得した投稿時刻";
+    if (message.source === "realtime") return "リアルタイム追加として取得した投稿時刻";
+    return "ページ上から取得した投稿時刻";
   }
 
   function assessAccountRisk(messages) {
@@ -1699,6 +1712,8 @@
   });
 
   const observer = new MutationObserver((mutations) => {
+    const rows = new Set();
+
     for (const mutation of mutations) {
       for (const node of mutation.addedNodes) {
         if (node.nodeType !== Node.ELEMENT_NODE) continue;
@@ -1707,23 +1722,28 @@
         const usernameElement = getUsernameElement(node);
         if (usernameElement) {
           const row = findLikelyRowFromUsername(usernameElement);
-          if (row) scanRow(row);
+          if (row) rows.add(row);
         }
 
         if (isInsideChatArea(node) && parseUsernameMessage(node)) {
-          scanRow(node);
+          rows.add(node);
         }
 
         node.querySelectorAll?.(ANY_USERNAME_SELECTOR).forEach((candidate) => {
           if (!looksLikeUsername(getUsernameValue(candidate))) return;
           const row = findLikelyRowFromUsername(candidate);
-          if (row) scanRow(row);
+          if (row) rows.add(row);
         });
 
         node.querySelectorAll?.("div, li, p, span").forEach((candidate) => {
-          if (isInsideChatArea(candidate) && parseUsernameMessage(candidate)) scanRow(candidate);
+          if (isInsideChatArea(candidate) && parseUsernameMessage(candidate)) rows.add(candidate);
         });
       }
+    }
+
+    const trustRealtimeTimestamp = shouldTrustRealtimeTimestamp(rows.size);
+    for (const row of rows) {
+      scanRow(row, { trustRealtimeTimestamp });
     }
   });
 
@@ -1797,6 +1817,7 @@
     pinnedApiCheckingUsers.clear();
     pinnedApiChecking = false;
     timestampCorrectionRunning = false;
+    realtimeTimestampTrustReadyAt = Date.now() + REALTIME_TIMESTAMP_TRUST_DELAY_MS;
     streamContext = null;
     activeChannelSlug = nextSlug;
     storageKey = `kch:${location.hostname}:${nextSlug}:route-pending`;
@@ -1974,6 +1995,14 @@
         getMessageTimestampKind(message) === "observed" &&
         Math.abs(message.timestamp - candidate.observedAt) < 10 * 60 * 1000;
     });
+  }
+
+  function shouldTrustRealtimeTimestamp(rowCount) {
+    if (rowCount < 1 || rowCount > REALTIME_TIMESTAMP_MAX_ROWS) return false;
+    if (Date.now() < realtimeTimestampTrustReadyAt) return false;
+    if (document.visibilityState === "hidden") return false;
+    if (isChatPaused()) return false;
+    return true;
   }
 
   async function backfillUserHistory(username) {

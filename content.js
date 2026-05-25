@@ -39,6 +39,8 @@
     timestampCorrectionAttempts: 0,
     lastUrl: "",
     lastStatus: "",
+    lastStartTime: "",
+    lastError: "",
     lastMessageCount: 0,
     lastAcceptedMessageCount: 0,
     lastResponseShape: "",
@@ -808,7 +810,7 @@
   const popover = createPopover();
 
   window.__KICK_CHAT_HISTORY_HOVER__ = {
-    version: "2.38.0",
+    version: "2.39.0",
     getChatRootCount: () => getChatRoots().length,
     getKnownUsers: () => [...userHistory.values()].map((value) => ({
       username: value.displayName,
@@ -1831,8 +1833,9 @@
         return;
       }
 
-      const channel = await response.json();
-      const livestream = channel.livestream || channel.current_livestream || channel.recent_livestream || null;
+      const channelPayload = await response.json();
+      const channel = channelPayload?.channel || channelPayload;
+      const livestream = channel.livestream || channel.current_livestream || channel.recent_livestream || channel.stream || null;
       const startedAt = parseKickDate(livestream?.created_at || livestream?.start_time || livestream?.started_at);
 
       streamContext = {
@@ -1850,6 +1853,7 @@
       storageKey = `kch:${location.hostname}:${slug}:stream:${streamKey}`;
     } catch (_error) {
       streamContext = null;
+      apiDebug.lastError = "channel api error";
       apiDebug.lastSkippedReason = "channel api error";
     }
   }
@@ -2159,6 +2163,8 @@
     const url = `${API_ORIGIN}/api/v2/channels/${encodeURIComponent(streamContext.channelId)}/messages?start_time=${encodeURIComponent(startTime)}`;
     apiDebug.attempts += 1;
     apiDebug.lastUrl = url;
+    apiDebug.lastStartTime = startTime;
+    apiDebug.lastError = "";
     const response = await fetch(url, {
       credentials: "include",
       headers: {
@@ -2166,7 +2172,10 @@
       }
     });
     apiDebug.lastStatus = `messages:${response.status}`;
-    if (!response.ok) throw new Error(`chat api failed: ${response.status}`);
+    if (!response.ok) {
+      apiDebug.lastError = `chat api failed: ${response.status}`;
+      throw new Error(`chat api failed: ${response.status}`);
+    }
     apiWindowCache.add(cacheKey);
 
     const data = await response.json();
@@ -2348,11 +2357,7 @@
   }
 
   function formatKickApiTime(timestamp) {
-    const date = new Date(timestamp);
-    const pad = (value) => String(value).padStart(2, "0");
-
-    return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())} ` +
-      `${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}`;
+    return new Date(timestamp).toISOString();
   }
 
   function refreshActivePopover(key) {

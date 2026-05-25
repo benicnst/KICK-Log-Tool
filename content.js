@@ -817,7 +817,7 @@
   const popover = createPopover();
 
   window.__KICK_CHAT_HISTORY_HOVER__ = {
-    version: "2.44.0",
+    version: "2.45.0",
     getChatRootCount: () => getChatRoots().length,
     getKnownUsers: () => [...userHistory.values()].map((value) => ({
       username: value.displayName,
@@ -1318,12 +1318,10 @@
   function getPinIcon(pinned) {
     return `
       <svg viewBox="0 0 24 24" aria-hidden="true" class="kch-popover__pin-icon ${pinned ? "kch-popover__pin-icon--active" : ""}">
-        <g transform="rotate(-35 12 12)">
-          <path d="M13.2 14.8 15.1 22l1.5-7.2Z" fill="#cfd3d8"></path>
-          <rect x="8.4" y="7.2" width="7.2" height="8.2" rx="2" fill="#c90808"></rect>
-          <ellipse cx="12" cy="6.8" rx="7.2" ry="4.7" fill="#ff2d1f"></ellipse>
-          <ellipse cx="12" cy="14.2" rx="6.1" ry="4.5" fill="#ef1b12"></ellipse>
-          <ellipse cx="9.2" cy="5.2" rx="3.7" ry="1.7" fill="#ffbea0" opacity="0.48" transform="rotate(-18 9.2 5.2)"></ellipse>
+        <g class="kch-popover__pin-symbol" transform="rotate(-28 12 12)">
+          <circle class="kch-popover__pin-fill" cx="12" cy="7.2" r="5.6"></circle>
+          <rect class="kch-popover__pin-fill" x="10" y="11.2" width="4" height="9.2" rx="1.8"></rect>
+          <ellipse class="kch-popover__pin-highlight" cx="10" cy="5.4" rx="1.2" ry="1.8" transform="rotate(28 10 5.4)"></ellipse>
         </g>
       </svg>
     `;

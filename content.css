@@ -153,13 +153,21 @@
   align-items: center;
   justify-content: center;
   padding: 0;
-  color: #ff2d1f;
+  color: #c5ccd3;
 }
 
 .kch-popover__pin svg {
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
   overflow: visible;
+}
+
+.kch-popover__pin-fill {
+  fill: currentColor;
+}
+
+.kch-popover__pin-highlight {
+  fill: rgba(255, 255, 255, 0.55);
 }
 
 .kch-popover__close {
@@ -177,7 +185,7 @@
 
 .kch-popover--pinned .kch-popover__pin {
   border-color: rgba(83, 252, 24, 0.6);
-  background: rgba(83, 252, 24, 0.16);
+  background: rgba(83, 252, 24, 0.2);
   color: #53fc18;
   cursor: default;
 }

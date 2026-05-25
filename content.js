@@ -817,7 +817,7 @@
   const popover = createPopover();
 
   window.__KICK_CHAT_HISTORY_HOVER__ = {
-    version: "2.42.0",
+    version: "2.43.0",
     getChatRootCount: () => getChatRoots().length,
     getKnownUsers: () => [...userHistory.values()].map((value) => ({
       username: value.displayName,
@@ -1317,11 +1317,13 @@
 
   function getPinIcon(pinned) {
     return `
-      <svg viewBox="0 0 24 24" aria-hidden="true" class="${pinned ? "kch-popover__pin-icon--active" : ""}">
-        <path d="M12 17v5"></path>
-        <path d="M5 17h14"></path>
-        <path d="M7 9h10"></path>
-        <path d="M9 9V4h6v5l2 4H7l2-4Z"></path>
+      <svg viewBox="0 0 24 24" aria-hidden="true" class="kch-popover__pin-icon ${pinned ? "kch-popover__pin-icon--active" : ""}">
+        <g transform="rotate(-35 12 12)">
+          <path d="M12 17v5"></path>
+          <path d="M8 17h8"></path>
+          <path d="M9 3h6"></path>
+          <path d="M10 3v7l-2 3h8l-2-3V3"></path>
+        </g>
       </svg>
     `;
   }

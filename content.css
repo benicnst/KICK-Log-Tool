@@ -157,11 +157,11 @@
 }
 
 .kch-popover__pin svg {
-  width: 14px;
-  height: 14px;
+  width: 17px;
+  height: 17px;
   fill: none;
   stroke: currentColor;
-  stroke-width: 2;
+  stroke-width: 2.25;
   stroke-linecap: round;
   stroke-linejoin: round;
 }

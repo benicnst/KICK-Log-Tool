@@ -123,6 +123,7 @@ window.__KICK_CHAT_HISTORY_HOVER__.setModerationActionsEnabled(false)
 - 取得したチャット履歴は外部サーバーへ送信しません。
 - ドクロ判定されたアカウント一覧も外部サーバーへ送信しません。
 - ドクロ判定一覧はKickタブと拡張機能の内部メモリ上に保持され、永続保存はしません。
+- `activeTab`権限は、拡張機能アイコンをクリックした時に現在のKickタブから検出一覧を取得するために使います。
 - ページを開いている間だけKickページ側の`localStorage`へ一時保存し、ページを閉じる時に削除します。
 - 履歴補完、投稿時刻補正、チャット一時停止中の固定ユーザー確認のため、KickのAPIへ通信する場合があります。
 - ユーザーごとの履歴は設定された最大件数までに制限されます。
@@ -282,6 +283,7 @@ window.__KICK_CHAT_HISTORY_HOVER__.setModerationActionsEnabled(false)
 - Captured chat history is not sent to an external server.
 - The detected skull-marker account list is not sent to an external server.
 - The detected-account list is kept only in the Kick tab and extension runtime memory, not persistent storage.
+- The `activeTab` permission is used to read the detected-account list from the current Kick tab when you click the extension icon.
 - It is temporarily stored in the Kick page's `localStorage` while the page is open and cleared when the page is closed.
 - The extension may communicate with Kick APIs for history backfill, posting-time correction, and pinned-user checks while chat is paused.
 - History is limited to the configured maximum number of messages per user.

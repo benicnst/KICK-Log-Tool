@@ -23,6 +23,7 @@
   const TIMESTAMP_CORRECTION_MAX_ATTEMPTS = 3;
   const REALTIME_TIMESTAMP_TRUST_DELAY_MS = 8000;
   const REALTIME_TIMESTAMP_MAX_ROWS = 80;
+  const SUSPICIOUS_REPORT_RETRY_MS = 4000;
   const EMOTE_PLACEHOLDER = "[emote]";
   const MASS_REPEAT_MIN_LENGTH = 24;
   const MASS_REPEAT_STRONG_LENGTH = 80;
@@ -859,6 +860,7 @@
     handlePossibleChannelChange();
     scanPage();
     closeStaleHoverPopover();
+    if (suspiciousUsers.size > 0) scheduleSuspiciousUsersReport(SUSPICIOUS_REPORT_RETRY_MS);
   }
 
   function handlePossibleChannelChange() {
@@ -904,7 +906,7 @@
   const popover = createPopover();
 
   window.__KICK_CHAT_HISTORY_HOVER__ = {
-    version: "2.50.0",
+    version: "2.51.0",
     getChatRootCount: () => getChatRoots().length,
     getKnownUsers: () => [...userHistory.values()].map((value) => ({
       username: value.displayName,
@@ -1338,7 +1340,7 @@
       lastMessage: cleanText(latestMessage?.text || "").slice(0, 180)
     });
 
-    scheduleSuspiciousUsersReport();
+    scheduleSuspiciousUsersReport(350);
   }
 
   function getKickProfileUrl(username) {
@@ -1363,12 +1365,12 @@
     };
   }
 
-  function scheduleSuspiciousUsersReport() {
+  function scheduleSuspiciousUsersReport(delay = 350) {
     if (suspiciousReportTimer) return;
     suspiciousReportTimer = window.setTimeout(() => {
       suspiciousReportTimer = 0;
       sendSuspiciousUsersReport();
-    }, 350);
+    }, delay);
   }
 
   function sendSuspiciousUsersReport() {
@@ -1382,15 +1384,20 @@
     sendRuntimeMessage({ type: "KLT_SUSPICIOUS_USERS_RESET" });
   }
 
-  function sendRuntimeMessage(message) {
+  function sendRuntimeMessage(message, attempt = 0) {
     if (!hasRuntimeMessaging()) return;
 
     try {
       chrome.runtime.sendMessage(message, () => {
-        void chrome.runtime.lastError;
+        const error = chrome.runtime.lastError;
+        if (error && attempt < 2) {
+          window.setTimeout(() => sendRuntimeMessage(message, attempt + 1), 1000);
+        }
       });
     } catch (_error) {
-      // Extension contexts can be invalidated during reloads.
+      if (attempt < 2) {
+        window.setTimeout(() => sendRuntimeMessage(message, attempt + 1), 1000);
+      }
     }
   }
 

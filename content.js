@@ -179,7 +179,12 @@
 
   function looksLikeUsername(value) {
     const text = cleanText(value).replace(/^@/, "");
+    if (/^\d{1,2}$/.test(text)) return false;
     return text.length >= 1 && text.length <= 32 && /^[A-Za-z0-9_.-]+$/.test(text);
+  }
+
+  function stripLeadingChatTimestamp(value) {
+    return cleanText(value).replace(/^(?:\[\s*)?\d{1,2}:\d{2}(?::\d{2})?(?:\s*\])?\s+/, "");
   }
 
   function getLabel(element) {
@@ -419,7 +424,7 @@
   }
 
   function parseUsernameMessage(row) {
-    const text = cleanText(row?.innerText || row?.textContent);
+    const text = stripLeadingChatTimestamp(row?.innerText || row?.textContent);
     const match = text.match(/^@?([A-Za-z0-9_.-]{1,32})\s*:\s*(.+)$/);
     if (!match) return null;
 
@@ -906,7 +911,7 @@
   const popover = createPopover();
 
   window.__KICK_CHAT_HISTORY_HOVER__ = {
-    version: "2.52.0",
+    version: "2.53.0",
     getChatRootCount: () => getChatRoots().length,
     getKnownUsers: () => [...userHistory.values()].map((value) => ({
       username: value.displayName,

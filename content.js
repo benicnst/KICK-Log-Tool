@@ -10,9 +10,11 @@
   const API_ORIGIN = "https://kick.com";
   const BASE_STORAGE_KEY = `kch:${location.hostname}:${location.pathname.split("/").filter(Boolean)[0] || "home"}`;
   const MODERATION_ACTIONS_STORAGE_KEY = "klt:moderationActionsEnabled";
+  const SETTINGS_STORAGE_KEY = "klt:settings:v1";
   const HOVER_GRACE_MS = 450;
   const HOVER_HIDE_DELAY_MS = 160;
   const HOVER_BRIDGE_MARGIN = 6;
+  const AUTO_TEMPORARY_POPUP_MS = 4500;
   const PINNED_API_REFRESH_MS = 15 * 1000;
   const PINNED_API_LOOKBACK_WINDOWS = 2;
   const BACKFILL_RETRY_MS = 45 * 1000;
@@ -32,6 +34,16 @@
   const BACKFILL_WINDOW_OFFSETS_MINUTES = [
     1, 2, 4, 8, 15, 30, 45, 60, 90, 120, 180, 240
   ];
+  const ALERT_ACTIONS = new Set(["notify", "temporary", "auto-pin", "off"]);
+  const DEFAULT_SETTINGS = {
+    alertAction: "auto-pin",
+    watchlistEnabled: true,
+    ignorelistEnabled: true,
+    broadcasterListEnabled: true,
+    watchlist: [],
+    ignorelist: [],
+    broadcasterList: []
+  };
   const CHAT_PAUSED_PATTERNS = [
     "スクロールのためにチャットが一時停止",
     "チャットが一時停止",
@@ -45,6 +57,7 @@
   const autoPinnedUsers = new Set();
   const autoPinDismissedUsers = new Set();
   const suspiciousUsers = new Map();
+  const lastUserAnchors = new Map();
   const apiWindowCache = new Set();
   const pinnedApiCheckingUsers = new Set();
   const userBackfillState = new Map();
@@ -90,6 +103,7 @@
   let pinnedDragState = null;
   let popoverShownAt = 0;
   let suspiciousReportTimer = 0;
+  let userSettings = { ...DEFAULT_SETTINGS };
 
   const USERNAME_SELECTOR = [
     "[data-chat-entry-user]",
@@ -175,6 +189,58 @@
       .replace(/[\u200B-\u200D\uFEFF]/g, "")
       .replace(/\s+/g, " ")
       .trim();
+  }
+
+  function normalizeSettings(value) {
+    const settings = value && typeof value === "object" ? value : {};
+    const alertAction = ALERT_ACTIONS.has(settings.alertAction)
+      ? settings.alertAction
+      : DEFAULT_SETTINGS.alertAction;
+
+    return {
+      alertAction,
+      watchlistEnabled: settings.watchlistEnabled !== false,
+      ignorelistEnabled: settings.ignorelistEnabled !== false,
+      broadcasterListEnabled: settings.broadcasterListEnabled !== false,
+      watchlist: normalizeUsernameList(settings.watchlist),
+      ignorelist: normalizeUsernameList(settings.ignorelist),
+      broadcasterList: normalizeUsernameList(settings.broadcasterList)
+    };
+  }
+
+  function normalizeUsernameList(values) {
+    if (!Array.isArray(values)) return [];
+
+    const seen = new Set();
+    const list = [];
+    for (const value of values) {
+      const username = cleanText(value).replace(/^@/, "");
+      if (!looksLikeUsernameToken(username, { allowNumericOnly: true })) continue;
+      const key = normalizeUsername(username);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      list.push(key);
+    }
+
+    return list.slice(0, 200);
+  }
+
+  function getAlertAction() {
+    return ALERT_ACTIONS.has(userSettings.alertAction)
+      ? userSettings.alertAction
+      : DEFAULT_SETTINGS.alertAction;
+  }
+
+  function isIgnoredUser(key) {
+    return userSettings.ignorelistEnabled && userSettings.ignorelist.includes(key);
+  }
+
+  function isWatchlistedUser(key) {
+    return userSettings.watchlistEnabled && userSettings.watchlist.includes(key);
+  }
+
+  function isBroadcasterListedUser(key) {
+    return userSettings.broadcasterListEnabled && userSettings.broadcasterList.includes(key);
   }
 
   function looksLikeUsername(value) {
@@ -733,7 +799,10 @@
     pruneUsers();
     scheduleSave();
     if (!duplicate || messageSource === "api") refreshActivePopover(key);
-    if (!duplicate) handleSuspiciousUserCandidate(key, existing.displayName, messageSource, resolvedTimestampKind);
+    if (!duplicate) {
+      handleListedUserCandidate(key, existing.displayName, messageSource);
+      handleSuspiciousUserCandidate(key, existing.displayName, messageSource, resolvedTimestampKind);
+    }
     return !duplicate;
   }
 
@@ -786,6 +855,7 @@
     const user = getUsernameData(row);
     if (!user) return null;
 
+    rememberUserAnchor(user.username, row, user.usernameElement || row);
     const messageText = extractMessageText(row, user.username);
     if (!messageText || messageText === user.username) return null;
 
@@ -813,6 +883,22 @@
       timestampKind,
       source
     };
+  }
+
+  function rememberUserAnchor(username, row, anchor) {
+    const key = normalizeUsername(username);
+    if (!key || !row || !anchor) return;
+
+    lastUserAnchors.set(key, {
+      row,
+      anchor,
+      updatedAt: Date.now()
+    });
+
+    if (lastUserAnchors.size > MAX_USERS) {
+      const oldestKey = lastUserAnchors.keys().next().value;
+      lastUserAnchors.delete(oldestKey);
+    }
   }
 
   function getDomMessageTimestamp(row) {
@@ -935,7 +1021,7 @@
   const popover = createPopover();
 
   window.__KICK_CHAT_HISTORY_HOVER__ = {
-    version: "2.55.0",
+    version: "2.56.0",
     getChatRootCount: () => getChatRoots().length,
     getKnownUsers: () => [...userHistory.values()].map((value) => ({
       username: value.displayName,
@@ -1004,7 +1090,7 @@
       <div class="kch-popover__list"></div>
     `;
 
-    const risk = assessAccountRisk(messages);
+    const risk = shouldShowRiskMarker(key) ? assessAccountRisk(messages) : { suspicious: false, reasons: [] };
     const nameElement = targetPopover.querySelector(".kch-popover__name");
     const nameButton = targetPopover.querySelector(".kch-popover__name-text");
     nameButton.textContent = displayName;
@@ -1029,7 +1115,7 @@
           <path d="M21 20v-5h-5"></path>
         </svg>
       `;
-      nameElement.appendChild(refresh);
+    nameElement.appendChild(refresh);
     }
     const pinButton = targetPopover.querySelector(".kch-popover__pin");
     pinButton.innerHTML = getPinIcon(pinned);
@@ -1097,6 +1183,10 @@
       });
     }
 
+  }
+
+  function shouldShowRiskMarker(key) {
+    return getAlertAction() !== "off" && !isIgnoredUser(key);
   }
 
   function positionPopover(anchor) {
@@ -1336,23 +1426,40 @@
 
   function handleSuspiciousUserCandidate(key, username, messageSource, timestampKind) {
     if (routeResetInProgress) return;
-    if (messageSource !== "realtime") return;
+    if (getAlertAction() === "off") return;
+    if (isIgnoredUser(key)) return;
+    if (!isRealtimeSource(messageSource)) return;
     if (normalizeTimestampKind(timestampKind) !== "posted") return;
 
     const history = userHistory.get(key);
     const risk = assessAccountRisk(history?.messages || []);
     if (!risk.suspicious) return;
 
-    rememberSuspiciousUser(key, username, risk, history?.messages || []);
-    if (pinnedCards.has(key) || autoPinnedUsers.has(key) || autoPinDismissedUsers.has(key)) return;
-    if (pinnedCards.size >= MAX_PINNED_POPOVERS) return;
-
-    if (pinUser(username, { auto: true })) {
-      autoPinnedUsers.add(key);
-    }
+    rememberDetectedUser(key, username, risk.reasons, history?.messages || []);
+    runAlertAction(key, username);
   }
 
-  function rememberSuspiciousUser(key, username, risk, messages) {
+  function isRealtimeSource(source) {
+    return String(source || "").startsWith("realtime");
+  }
+
+  function handleListedUserCandidate(key, username, messageSource) {
+    if (routeResetInProgress) return;
+    if (getAlertAction() === "off") return;
+    if (isIgnoredUser(key)) return;
+    if (!String(messageSource || "").startsWith("dom") && !String(messageSource || "").startsWith("realtime")) return;
+
+    const reasons = [];
+    if (isWatchlistedUser(key)) reasons.push("ウォッチリスト");
+    if (isBroadcasterListedUser(key)) reasons.push("配信者リスト");
+    if (!reasons.length) return;
+
+    const history = userHistory.get(key);
+    rememberDetectedUser(key, username, reasons, history?.messages || []);
+    runAlertAction(key, username);
+  }
+
+  function rememberDetectedUser(key, username, reasons, messages) {
     const existing = suspiciousUsers.get(key);
     const postedMessages = messages
       .filter((message) => message?.text && message?.timestamp)
@@ -1360,11 +1467,17 @@
       .sort((a, b) => b.timestamp - a.timestamp);
     const latestMessage = postedMessages[0] || null;
     const now = Date.now();
+    const mergedReasons = [
+      ...new Set([
+        ...(existing?.reasons || []),
+        ...reasons
+      ])
+    ];
 
     suspiciousUsers.set(key, {
       username,
       profileUrl: getKickProfileUrl(username),
-      reasons: [...risk.reasons],
+      reasons: mergedReasons,
       firstDetectedAt: existing?.firstDetectedAt || now,
       lastDetectedAt: now,
       lastCommentAt: latestMessage?.timestamp || now,
@@ -1373,6 +1486,41 @@
     });
 
     scheduleSuspiciousUsersReport(350);
+  }
+
+  function runAlertAction(key, username) {
+    const action = getAlertAction();
+    if (action === "notify" || action === "off") return;
+    if (pinnedCards.has(key) || autoPinnedUsers.has(key) || autoPinDismissedUsers.has(key)) return;
+
+    if (action === "temporary") {
+      showTemporaryAlertPopover(key, username);
+      return;
+    }
+
+    if (action === "auto-pin") {
+      if (pinnedCards.size >= MAX_PINNED_POPOVERS) return;
+      if (pinUser(username, { auto: true })) {
+        autoPinnedUsers.add(key);
+      }
+    }
+  }
+
+  function showTemporaryAlertPopover(key, username) {
+    const anchorInfo = lastUserAnchors.get(key);
+    const anchor = anchorInfo?.anchor;
+    const row = anchorInfo?.row;
+    if (!anchor || !row || !document.documentElement.contains(anchor) || !document.documentElement.contains(row)) return;
+
+    clearTimeout(hideTimer);
+    activeRow = row;
+    activeUsername = username;
+    activeAnchor = anchor;
+    renderPopover(username, anchor);
+    hideTimer = window.setTimeout(() => {
+      if (isPointerOverPopover || activeRow?.matches?.(":hover")) return;
+      hidePopover();
+    }, AUTO_TEMPORARY_POPUP_MS);
   }
 
   function getKickProfileUrl(username) {
@@ -2183,6 +2331,73 @@
     saveTimer = window.setTimeout(saveHistory, SAVE_DELAY_MS);
   }
 
+  async function loadSettings() {
+    const result = await readExtensionStorage(SETTINGS_STORAGE_KEY);
+    userSettings = normalizeSettings(result?.[SETTINGS_STORAGE_KEY]);
+  }
+
+  function installSettingsListener() {
+    if (!hasExtensionStorage()) return;
+
+    try {
+      chrome.storage.onChanged.addListener((changes, areaName) => {
+        if (areaName !== "local") return;
+        if (!changes[SETTINGS_STORAGE_KEY]) return;
+
+        userSettings = normalizeSettings(changes[SETTINGS_STORAGE_KEY].newValue);
+        applySettingsToDetectedUsers();
+        refreshAllPopovers();
+      });
+    } catch (_error) {
+      // Storage events are optional while the extension is being reloaded.
+    }
+  }
+
+  function readExtensionStorage(key) {
+    if (!hasExtensionStorage()) return Promise.resolve({});
+
+    return new Promise((resolve) => {
+      try {
+        chrome.storage.local.get(key, (result) => {
+          if (chrome.runtime.lastError) {
+            resolve({});
+            return;
+          }
+
+          resolve(result || {});
+        });
+      } catch (_error) {
+        resolve({});
+      }
+    });
+  }
+
+  function hasExtensionStorage() {
+    try {
+      return Boolean(globalThis.chrome?.runtime?.id && globalThis.chrome?.storage?.local);
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  function applySettingsToDetectedUsers() {
+    if (getAlertAction() === "off") {
+      suspiciousUsers.clear();
+      sendSuspiciousUsersReport();
+      return;
+    }
+
+    let changed = false;
+    for (const key of suspiciousUsers.keys()) {
+      if (isIgnoredUser(key)) {
+        suspiciousUsers.delete(key);
+        changed = true;
+      }
+    }
+
+    if (changed) sendSuspiciousUsersReport();
+  }
+
   function saveHistory() {
     const payload = Object.fromEntries(userHistory.entries());
     try {
@@ -2244,6 +2459,7 @@
     apiWindowCache.clear();
     userBackfillState.clear();
     pendingTimestampCorrections.clear();
+    lastUserAnchors.clear();
     pinnedApiCheckingUsers.clear();
     autoPinnedUsers.clear();
     autoPinDismissedUsers.clear();
@@ -2895,7 +3111,8 @@
   }
 
   installRouteChangeListeners();
-  initializeStreamContext().finally(() => loadHistory()).finally(() => {
+  installSettingsListener();
+  loadSettings().finally(() => initializeStreamContext()).finally(() => loadHistory()).finally(() => {
     scanPage();
     scanInterval = window.setInterval(periodicRefresh, 2000);
   });
@@ -2909,6 +3126,7 @@
     if (scanInterval) window.clearInterval(scanInterval);
     if (pinnedApiInterval) window.clearInterval(pinnedApiInterval);
     pendingTimestampCorrections.clear();
+    lastUserAnchors.clear();
     suspiciousUsers.clear();
     clearTimeout(suspiciousReportTimer);
     suspiciousReportTimer = 0;

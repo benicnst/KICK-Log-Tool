@@ -16,7 +16,96 @@
         </div>
         <button id="clear" class="klt-popup__clear" type="button" disabled>クリア</button>
       </header>
-      <section id="list" class="klt-popup__list" aria-live="polite"></section>
+      <section class="klt-popup__settings" aria-label="設定">
+        <div class="klt-popup__settings-title">
+          <h2>設定</h2>
+          <span>検出時の動作と対象リスト</span>
+        </div>
+
+        <div class="klt-popup__setting klt-popup__setting--action">
+          <div class="klt-popup__label">検出時の動作</div>
+          <div id="alert-action" class="klt-popup__segmented" role="group" aria-label="ドクロ判定時の動作">
+            <button type="button" data-action="notify">通知だけ</button>
+            <button type="button" data-action="temporary">一時表示</button>
+            <button type="button" data-action="auto-pin">自動固定</button>
+            <button type="button" data-action="off">オフ</button>
+          </div>
+        </div>
+
+        <div class="klt-popup__quick-toggles">
+          <div class="klt-popup__quick-toggle">
+            <div>
+              <span class="klt-popup__label">ウォッチ</span>
+              <span class="klt-popup__hint">登録IDを検出</span>
+            </div>
+            <label class="klt-popup__toggle">
+              <input id="watchlist-enabled" type="checkbox">
+              <span></span>
+            </label>
+          </div>
+
+          <div class="klt-popup__quick-toggle">
+            <div>
+              <span class="klt-popup__label">無視</span>
+              <span class="klt-popup__hint">自動検出から除外</span>
+            </div>
+            <label class="klt-popup__toggle">
+              <input id="ignorelist-enabled" type="checkbox">
+              <span></span>
+            </label>
+          </div>
+
+          <div class="klt-popup__quick-toggle">
+            <div>
+              <span class="klt-popup__label">配信者</span>
+              <span class="klt-popup__hint">配信者IDを検出</span>
+            </div>
+            <label class="klt-popup__toggle">
+              <input id="broadcaster-list-enabled" type="checkbox">
+              <span></span>
+            </label>
+          </div>
+        </div>
+
+        <details class="klt-popup__list-editor">
+          <summary>リスト編集</summary>
+
+          <div class="klt-popup__setting" data-list-setting="watchlist">
+            <div class="klt-popup__label">ウォッチリスト</div>
+            <div class="klt-popup__hint">登録IDがコメントしたら検出します。</div>
+            <form id="watchlist-form" class="klt-popup__list-form">
+              <input id="watchlist-input" type="text" autocomplete="off" placeholder="account_id">
+              <button type="submit">追加</button>
+            </form>
+            <div id="watchlist-items" class="klt-popup__chips"></div>
+          </div>
+
+          <div class="klt-popup__setting" data-list-setting="ignorelist">
+            <div class="klt-popup__label">無視リスト</div>
+            <div class="klt-popup__hint">登録IDは自動検出・自動表示から除外します。</div>
+            <form id="ignorelist-form" class="klt-popup__list-form">
+              <input id="ignorelist-input" type="text" autocomplete="off" placeholder="trusted_id">
+              <button type="submit">追加</button>
+            </form>
+            <div id="ignorelist-items" class="klt-popup__chips"></div>
+          </div>
+
+          <div class="klt-popup__setting" data-list-setting="broadcasterList">
+            <div class="klt-popup__label">配信者リスト</div>
+            <div class="klt-popup__hint">フォロー中の配信者IDを登録してコメントを検出します。</div>
+            <form id="broadcaster-list-form" class="klt-popup__list-form">
+              <input id="broadcaster-list-input" type="text" autocomplete="off" placeholder="streamer_id">
+              <button type="submit">追加</button>
+            </form>
+            <div id="broadcaster-list-items" class="klt-popup__chips"></div>
+          </div>
+        </details>
+      </section>
+
+      <section class="klt-popup__section">
+        <h2>検出一覧</h2>
+        <div id="list" class="klt-popup__list" aria-live="polite"></div>
+      </section>
     </main>
     <script src="popup.js"></script>
   </body>

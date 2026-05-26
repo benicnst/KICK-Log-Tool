@@ -25,9 +25,10 @@ This project is not affiliated with, endorsed by, or sponsored by Kick.
 - チャット一時停止を解除すると、API確認ではなくチャット表示欄のリアルタイム取得に戻ります。
 - API確認中は固定ユーザー名の横に回転するリロードマークを表示します。
 - 複数の不審な投稿パターンに該当した場合、ユーザー名横にドクロマークを表示します。
-- ドクロマーク判定に該当したユーザーは、最大3人まで自動でポップアップ固定されます。
-- ドクロマーク判定の検出数を拡張機能アイコンのバッジに表示します。
-- 拡張機能アイコンをクリックすると、検出されたアカウント一覧を確認できます。
+- ドクロマーク判定時の動作を、通知だけ・一時表示・自動固定・オフから選べます。
+- ウォッチリスト、無視リスト、配信者リストを設定できます。
+- 検出数を拡張機能アイコンのバッジに表示します。
+- 拡張機能アイコンをクリックすると、検出されたアカウント一覧と設定を確認できます。
 - 任意でモデレーション用コマンドボタンを表示できます。初期状態では非表示です。
 
 ### Chromeへのインストール方法
@@ -58,9 +59,13 @@ EdgeとBraveもChromium系ブラウザのため、未パッケージ拡張機能
 - 固定ポップアップはヘッダー部分をドラッグして移動できます。
 - 閉じるボタンで固定ポップアップを閉じられます。
 - 拡張機能アイコンの数字は、現在のKickタブでドクロ判定されたアカウント数です。
-- 拡張機能アイコンをクリックすると検出一覧を表示します。
+- 拡張機能アイコンをクリックすると検出一覧と設定を表示します。
 - 検出一覧のアカウント名をクリックすると、そのKickアカウントページを新規タブで開きます。
 - 検出一覧の`クリア`を押すと、現在のKickタブの検出一覧とバッジを消します。
+- ドクロ判定時の動作は`通知だけ`、`一時表示`、`自動固定`、`オフ`から選べます。
+- ウォッチリストに登録したIDがコメントすると検出一覧へ表示します。
+- 無視リストに登録したIDはドクロ判定、自動表示、自動固定の対象外になります。
+- 配信者リストにフォロー中の配信者IDを登録すると、そのIDのコメントを検出します。
 - チャットがスクロールで一時停止している間だけ、固定ユーザーの新着確認に限定API確認を使います。
 - チャット一時停止を解除すると、表示チャット欄のDOM監視によるリアルタイム取得に戻ります。
 - リアルタイム取得で投稿時刻が取れない場合は、直近のKick APIと照合して投稿時刻への補正を試みます。
@@ -84,7 +89,7 @@ EdgeとBraveもChromium系ブラウザのため、未パッケージ拡張機能
 - 1コメント内で同じ語句を大量に繰り返している。
 - 絵文字やスタンプ系の文字列を大量に投稿している。
 
-ドクロマーク判定に該当したユーザーは最大3人まで自動でポップアップ固定されます。閉じたユーザーは、その配信中は自動固定されません。手動でピン留めした場合は再び固定できます。
+ドクロマーク判定に該当したユーザーの動作は設定で変更できます。`自動固定`の場合、最大3人までポップアップ固定されます。閉じたユーザーは、その配信中は自動固定されません。手動でピン留めした場合は再び固定できます。
 
 誤判定になり得る例:
 
@@ -125,6 +130,7 @@ window.__KICK_CHAT_HISTORY_HOVER__.setModerationActionsEnabled(false)
 - ドクロ判定されたアカウント一覧も外部サーバーへ送信しません。
 - ドクロ判定一覧はKickタブと拡張機能の内部メモリ上に保持され、永続保存はしません。
 - `activeTab`権限は、拡張機能アイコンをクリックした時に現在のKickタブから検出一覧を取得するために使います。
+- `storage`権限は、ドクロ判定時の動作、ウォッチリスト、無視リスト、配信者リストの設定保存に使います。
 - ページを開いている間だけKickページ側の`localStorage`へ一時保存し、ページを閉じる時に削除します。
 - 履歴補完、投稿時刻補正、チャット一時停止中の固定ユーザー確認のため、KickのAPIへ通信する場合があります。
 - ユーザーごとの履歴は設定された最大件数までに制限されます。
@@ -186,9 +192,10 @@ GitHub Releaseには、`dist/KICK-Log-Tool.zip`をアップロードしてくだ
 - Returns to DOM-based realtime capture after chat pause is released.
 - Shows a rotating reload icon next to pinned users while API checking is active.
 - Shows a skull marker when multiple suspicious posting patterns are detected.
-- Automatically pins up to 3 popups when users match the skull-marker conditions.
-- Shows the number of detected skull-marker users on the extension icon badge.
-- Shows all detected accounts in the extension popup.
+- Lets you choose the skull-marker action: notify only, temporary popup, auto-pin, or off.
+- Supports a watchlist, ignore list, and broadcaster list.
+- Shows the number of detected accounts on the extension icon badge.
+- Shows all detected accounts and settings in the extension popup.
 - Provides optional moderation command buttons, disabled by default.
 
 ### Install In Chrome
@@ -218,10 +225,14 @@ Edge and Brave support unpacked Chromium extensions.
 - Click Fixed to pin the popup.
 - Drag a pinned popup by its header.
 - Close a pinned popup with the close button.
-- The extension icon badge shows the number of skull-marker users detected in the current Kick tab.
-- Click the extension icon to open the detected-account list.
+- The extension icon badge shows the number of detected accounts in the current Kick tab.
+- Click the extension icon to open the detected-account list and settings.
 - Click an account in the list to open that Kick account page in a new tab.
 - Click `Clear` in the popup to clear the detected list and badge for the current Kick tab.
+- Choose the skull-marker action from `Notify only`, `Temporary popup`, `Auto-pin`, or `Off`.
+- Add IDs to the watchlist to detect comments from those accounts.
+- Add IDs to the ignore list to exclude them from skull detection and automatic alerts.
+- Add followed broadcaster IDs to the broadcaster list to detect their comments.
 - When chat is paused by scrolling, pinned users are checked through the limited API refresh.
 - When chat pause is released, realtime capture returns to the visible chat DOM.
 - When realtime capture does not include a posting time, the extension tries to correct it by matching recent Kick API messages.
@@ -245,7 +256,7 @@ The marker is shown only when 2 or more of these conditions are true:
 - One comment contains heavy repeated phrases.
 - A comment contains a large amount of emoji or emote-like content.
 
-When a user matches the skull-marker conditions, the popup is automatically pinned, up to 3 users at a time. If you close an automatically pinned user, it will not be auto-pinned again during that stream. You can still pin that user manually.
+The action after a skull-marker match is configurable. In `Auto-pin` mode, up to 3 users are pinned automatically. If you close an automatically pinned user, it will not be auto-pinned again during that stream. You can still pin that user manually.
 
 Examples that can still be false positives:
 
@@ -283,9 +294,10 @@ window.__KICK_CHAT_HISTORY_HOVER__.setModerationActionsEnabled(false)
 
 - The extension does not use an external server controlled by this project.
 - Captured chat history is not sent to an external server.
-- The detected skull-marker account list is not sent to an external server.
+- The detected account list is not sent to an external server.
 - The detected-account list is kept only in the Kick tab and extension runtime memory, not persistent storage.
 - The `activeTab` permission is used to read the detected-account list from the current Kick tab when you click the extension icon.
+- The `storage` permission is used only to save extension settings such as alert action, watchlist, ignore list, and broadcaster list.
 - It is temporarily stored in the Kick page's `localStorage` while the page is open and cleared when the page is closed.
 - The extension may communicate with Kick APIs for history backfill, posting-time correction, and pinned-user checks while chat is paused.
 - History is limited to the configured maximum number of messages per user.

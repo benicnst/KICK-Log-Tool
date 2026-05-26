@@ -47,9 +47,13 @@
   const channel = document.querySelector("#channel");
   const list = document.querySelector("#list");
   const clearButton = document.querySelector("#clear");
+  const settingsToggle = document.querySelector("#settings-toggle");
+  const mainView = document.querySelector("#main-view");
+  const settingsView = document.querySelector("#settings-view");
   const actionGroup = document.querySelector("#alert-action");
   let activeTabId = 0;
   let activeTabUrl = "";
+  let settingsVisible = false;
   let settings = { ...DEFAULT_SETTINGS };
 
   bindEvents();
@@ -57,6 +61,7 @@
 
   function bindEvents() {
     clearButton.addEventListener("click", clearDetectedUsers);
+    settingsToggle.addEventListener("click", toggleSettingsView);
 
     chrome.storage.onChanged.addListener((changes, areaName) => {
       if (areaName !== "local" || !changes[SETTINGS_STORAGE_KEY]) return;
@@ -111,6 +116,18 @@
         saveSettings(removeUsernameFromList(settings, listKey, button.dataset.remove));
       });
     }
+  }
+
+  function toggleSettingsView() {
+    setSettingsViewVisible(!settingsVisible);
+  }
+
+  function setSettingsViewVisible(visible) {
+    settingsVisible = visible;
+    mainView.hidden = visible;
+    settingsView.hidden = !visible;
+    settingsToggle.textContent = visible ? "戻る" : "設定";
+    settingsToggle.setAttribute("aria-pressed", String(visible));
   }
 
   async function init() {

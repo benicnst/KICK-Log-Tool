@@ -178,9 +178,17 @@
   }
 
   function looksLikeUsername(value) {
+    return looksLikeUsernameToken(value);
+  }
+
+  function looksLikeUsernameToken(value, options = {}) {
     const text = cleanText(value).replace(/^@/, "");
-    if (/^\d{1,2}$/.test(text)) return false;
+    if (isNumericOnlyUsername(text) && options.allowNumericOnly !== true) return false;
     return text.length >= 1 && text.length <= 32 && /^[A-Za-z0-9_.-]+$/.test(text);
+  }
+
+  function isNumericOnlyUsername(value) {
+    return /^\d+$/.test(cleanText(value).replace(/^@/, ""));
   }
 
   function stripLeadingChatTimestamp(value) {
@@ -239,7 +247,7 @@
       const candidate = parts[0];
       if (ignored.has(candidate.toLowerCase())) return "";
 
-      return looksLikeUsername(candidate) ? candidate : "";
+      return looksLikeUsernameToken(candidate, { allowNumericOnly: true }) ? candidate : "";
     } catch (_error) {
       return "";
     }
@@ -365,10 +373,7 @@
       ...root.querySelectorAll(USERNAME_SELECTOR)
     ].filter(Boolean);
 
-    return candidates.find((element) => {
-      if (!isVisibleElement(element)) return false;
-      return looksLikeUsername(getUsernameValue(element));
-    }) || null;
+    return candidates.find((element) => isUsableUsernameElement(element)) || null;
   }
 
   function getClickableUsernameElement(root) {
@@ -383,8 +388,15 @@
       if (!isVisibleElement(element)) return false;
       if (!isInsideChatArea(element)) return false;
       if (!isProfileClickTarget(element)) return false;
-      return looksLikeUsername(getUsernameValue(element));
+      return isUsableUsernameElement(element);
     }) || null;
+  }
+
+  function isUsableUsernameElement(element) {
+    if (!isVisibleElement(element)) return false;
+    return looksLikeUsernameToken(getUsernameValue(element), {
+      allowNumericOnly: Boolean(getUsernameFromProfileLink(element))
+    });
   }
 
   function isProfileClickTarget(element) {
@@ -415,11 +427,13 @@
     }
 
     const username = getUsernameValue(usernameElement);
-    if (!looksLikeUsername(username)) return null;
+    const allowNumericOnly = Boolean(getUsernameFromProfileLink(usernameElement));
+    if (!looksLikeUsernameToken(username, { allowNumericOnly })) return null;
 
     return {
       username,
-      usernameElement
+      usernameElement,
+      allowNumericOnly
     };
   }
 
@@ -481,7 +495,7 @@
     const boundary = getSearchBoundary(element);
 
     const directUsername = element.closest?.(CLICKABLE_USERNAME_SELECTOR) || element.closest?.(USERNAME_SELECTOR);
-    if (directUsername && looksLikeUsername(getUsernameValue(directUsername)) && isProfileClickTarget(directUsername)) {
+    if (directUsername && isUsableUsernameElement(directUsername) && isProfileClickTarget(directUsername)) {
       const row = findLikelyRowFromUsername(directUsername);
       if (row) return row;
     }
@@ -527,7 +541,7 @@
   function findNearbyUsernameElement(element, chatRoot) {
     const rect = element.getBoundingClientRect();
     const titleElements = [...chatRoot.querySelectorAll(ANY_USERNAME_SELECTOR)]
-      .filter((candidate) => looksLikeUsername(getUsernameValue(candidate)) && isVisibleElement(candidate));
+      .filter((candidate) => isUsableUsernameElement(candidate));
 
     return titleElements.find((candidate) => {
       const candidateRect = candidate.getBoundingClientRect();
@@ -674,11 +688,12 @@
   }
 
   function rememberMessage(username, text, timestamp = Date.now(), messageId = "", source = "", timestampKind = "") {
+    const messageSource = source || (messageId ? "api" : "dom");
+    const allowNumericOnly = messageSource === "api" || isTrustedNumericMessageSource(messageSource);
     const key = normalizeUsername(username);
-    if (!key || !text) return false;
+    if (!key || !text || !looksLikeUsernameToken(username, { allowNumericOnly })) return false;
 
     if (streamContext?.startedAt && timestamp < streamContext.startedAt) return false;
-    const messageSource = source || (messageId ? "api" : "dom");
     const resolvedTimestampKind = normalizeTimestampKind(timestampKind || (messageSource === "api" ? "posted" : ""));
 
     const existing = userHistory.get(key) || {
@@ -720,6 +735,10 @@
     if (!duplicate || messageSource === "api") refreshActivePopover(key);
     if (!duplicate) handleSuspiciousUserCandidate(key, existing.displayName, messageSource, resolvedTimestampKind);
     return !duplicate;
+  }
+
+  function isTrustedNumericMessageSource(source) {
+    return /-profile$/.test(String(source || ""));
   }
 
   function findDuplicateMessage(messages, text, timestamp, messageId, messageSource) {
@@ -778,7 +797,12 @@
     const timestamp = postedTimestamp || Date.now();
     const trustRealtimeTimestamp = !postedTimestamp && options.trustRealtimeTimestamp === true;
     const timestampKind = postedTimestamp || trustRealtimeTimestamp ? "posted" : "observed";
-    const source = postedTimestamp ? "dom" : trustRealtimeTimestamp ? "realtime" : "observed";
+    const sourceSuffix = user.allowNumericOnly ? "-profile" : "";
+    const source = postedTimestamp
+      ? `dom${sourceSuffix}`
+      : trustRealtimeTimestamp
+        ? `realtime${sourceSuffix}`
+        : `observed${sourceSuffix}`;
     rememberMessage(user.username, messageText, timestamp, "", source, timestampKind);
     if (!postedTimestamp && !trustRealtimeTimestamp) queueTimestampCorrection(user.username, messageText, timestamp);
 
@@ -850,7 +874,7 @@
   function scanPage() {
     for (const chatRoot of getChatRoots()) {
       const usernameElements = [...chatRoot.querySelectorAll(ANY_USERNAME_SELECTOR)]
-        .filter((element) => looksLikeUsername(getUsernameValue(element)) && isVisibleElement(element));
+        .filter((element) => isUsableUsernameElement(element));
 
       for (const usernameElement of usernameElements) {
         const row = findLikelyRowFromUsername(usernameElement);
@@ -911,7 +935,7 @@
   const popover = createPopover();
 
   window.__KICK_CHAT_HISTORY_HOVER__ = {
-    version: "2.53.0",
+    version: "2.54.0",
     getChatRootCount: () => getChatRoots().length,
     getKnownUsers: () => [...userHistory.values()].map((value) => ({
       username: value.displayName,
@@ -2132,7 +2156,7 @@
         }
 
         node.querySelectorAll?.(ANY_USERNAME_SELECTOR).forEach((candidate) => {
-          if (!looksLikeUsername(getUsernameValue(candidate))) return;
+          if (!isUsableUsernameElement(candidate)) return;
           const row = findLikelyRowFromUsername(candidate);
           if (row) rows.add(row);
         });
@@ -2178,18 +2202,22 @@
 
     for (const [key, value] of Object.entries(payload)) {
       if (!value?.displayName || !Array.isArray(value.messages)) continue;
+      const messages = value.messages
+        .filter((message) => message?.text && message?.timestamp)
+        .filter((message) => !streamContext?.startedAt || message.timestamp >= streamContext.startedAt)
+        .map((message) => ({
+          ...message,
+          source: message.source || (message.id ? "api" : "dom"),
+          timestampKind: message.timestampKind || (message.source === "api" || message.correctedTimestamp ? "posted" : "observed"),
+          correctedTimestamp: Boolean(message.correctedTimestamp)
+        }))
+        .slice(0, MAX_MESSAGES);
+      const allowNumericOnly = messages.some((message) => message.source === "api" || isTrustedNumericMessageSource(message.source));
+      if (!looksLikeUsernameToken(value.displayName, { allowNumericOnly })) continue;
+
       userHistory.set(key, {
         displayName: value.displayName,
-        messages: value.messages
-          .filter((message) => message?.text && message?.timestamp)
-          .filter((message) => !streamContext?.startedAt || message.timestamp >= streamContext.startedAt)
-          .map((message) => ({
-            ...message,
-            source: message.source || (message.id ? "api" : "dom"),
-            timestampKind: message.timestampKind || (message.source === "api" || message.correctedTimestamp ? "posted" : "observed"),
-            correctedTimestamp: Boolean(message.correctedTimestamp)
-          }))
-          .slice(0, MAX_MESSAGES)
+        messages
       });
     }
   }
@@ -2705,7 +2733,7 @@
 
   function looksLikeApiMessage(message) {
     const username = getApiMessageUsername(message);
-    return Boolean(looksLikeUsername(username) && getApiMessageText(message) && getApiMessageTimestamp(message));
+    return Boolean(looksLikeUsernameToken(username, { allowNumericOnly: true }) && getApiMessageText(message) && getApiMessageTimestamp(message));
   }
 
   function rememberApiMessage(message) {

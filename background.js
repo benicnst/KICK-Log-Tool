@@ -98,14 +98,39 @@
   }
 
   function updateBadge(tabId, count) {
+    if (!Number.isFinite(tabId)) return;
+
     const text = count > 99 ? "99+" : count > 0 ? String(count) : "";
-    chrome.action.setBadgeBackgroundColor({ tabId, color: "#53fc18" });
-    chrome.action.setBadgeTextColor?.({ tabId, color: "#101316" });
-    chrome.action.setBadgeText({ tabId, text });
-    chrome.action.setTitle({
+    safelyUpdateTabAction(tabId, () => chrome.action.setBadgeBackgroundColor({ tabId, color: "#53fc18" }));
+    if (chrome.action.setBadgeTextColor) {
+      safelyUpdateTabAction(tabId, () => chrome.action.setBadgeTextColor({ tabId, color: "#101316" }));
+    }
+    safelyUpdateTabAction(tabId, () => chrome.action.setBadgeText({ tabId, text }));
+    safelyUpdateTabAction(tabId, () => chrome.action.setTitle({
       tabId,
       title: count > 0 ? `KICK Log Tool - ${count} suspicious users` : "KICK Log Tool"
-    });
+    }));
+  }
+
+  function safelyUpdateTabAction(tabId, action) {
+    try {
+      const result = action();
+      if (result && typeof result.catch === "function") {
+        result.catch((error) => handleTabActionError(tabId, error));
+      }
+    } catch (error) {
+      handleTabActionError(tabId, error);
+    }
+  }
+
+  function handleTabActionError(tabId, error) {
+    if (isMissingTabError(error)) {
+      reportsByTabId.delete(tabId);
+    }
+  }
+
+  function isMissingTabError(error) {
+    return /No tab with id/i.test(String(error?.message || error || ""));
   }
 
   function getProfileUrl(username) {

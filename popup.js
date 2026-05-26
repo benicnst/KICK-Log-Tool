@@ -7,9 +7,11 @@
   const CLEAR_BACKGROUND_REPORT_TYPE = "KLT_CLEAR_SUSPICIOUS_REPORT";
 
   const summary = document.querySelector("#summary");
+  const channel = document.querySelector("#channel");
   const list = document.querySelector("#list");
   const clearButton = document.querySelector("#clear");
   let activeTabId = 0;
+  let activeTabUrl = "";
 
   init();
 
@@ -38,8 +40,10 @@
   async function init() {
     const tab = await getActiveTab();
     activeTabId = tab?.id || 0;
+    activeTabUrl = tab?.url || "";
 
     if (!activeTabId) {
+      channel.textContent = "対象ページなし";
       renderEmpty("アクティブなタブを取得できませんでした。");
       return;
     }
@@ -60,10 +64,11 @@
     const users = Array.isArray(report.users) ? report.users : [];
     clearButton.disabled = users.length === 0;
 
-    const channel = report.channelSlug ? ` / ${report.channelSlug}` : "";
+    const channelName = report.channelSlug || getChannelSlugFromUrl(report.pageUrl) || getChannelSlugFromUrl(activeTabUrl);
+    channel.textContent = channelName ? `対象: ${channelName}` : "対象: Kickページ";
     summary.textContent = users.length
-      ? `検出 ${users.length}件${channel}`
-      : `検出はありません${channel}`;
+      ? `検出 ${users.length}件`
+      : "検出はありません";
 
     list.replaceChildren();
     if (!users.length) {
@@ -152,5 +157,17 @@
 
   function getProfileUrl(username) {
     return `https://kick.com/${encodeURIComponent(String(username || "").replace(/^@/, ""))}`;
+  }
+
+  function getChannelSlugFromUrl(value) {
+    try {
+      const url = new URL(value || "");
+      if (url.hostname !== "kick.com" && url.hostname !== "www.kick.com") return "";
+      const ignored = new Set(["api", "embed", "popout", "video", "videos", "chatroom", "mobile"]);
+      const first = url.pathname.split("/").filter(Boolean)[0] || "";
+      return first && !ignored.has(first.toLowerCase()) ? first : "";
+    } catch (_error) {
+      return "";
+    }
   }
 })();

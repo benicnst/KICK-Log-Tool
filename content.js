@@ -22,7 +22,7 @@
   const TIMESTAMP_CORRECTION_MAX_PENDING = 80;
   const TIMESTAMP_CORRECTION_MAX_ATTEMPTS = 3;
   const REALTIME_TIMESTAMP_TRUST_DELAY_MS = 8000;
-  const REALTIME_TIMESTAMP_MAX_ROWS = 3;
+  const REALTIME_TIMESTAMP_MAX_ROWS = 80;
   const EMOTE_PLACEHOLDER = "[emote]";
   const MASS_REPEAT_MIN_LENGTH = 24;
   const MASS_REPEAT_STRONG_LENGTH = 80;
@@ -904,7 +904,7 @@
   const popover = createPopover();
 
   window.__KICK_CHAT_HISTORY_HOVER__ = {
-    version: "2.49.0",
+    version: "2.50.0",
     getChatRootCount: () => getChatRoots().length,
     getKnownUsers: () => [...userHistory.values()].map((value) => ({
       username: value.displayName,

@@ -38,10 +38,22 @@ body {
 }
 
 h1 {
-  margin: 0 0 4px;
+  margin: 0 0 5px;
   color: var(--klt-green);
   font-size: 15px;
   line-height: 1.2;
+}
+
+.klt-popup__channel {
+  max-width: 220px;
+  margin-bottom: 3px;
+  overflow: hidden;
+  color: #dbe3ea;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 p {

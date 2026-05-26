@@ -53,6 +53,7 @@ EdgeとBraveもChromium系ブラウザのため、未パッケージ拡張機能
 ### 使い方
 
 - チャット欄のユーザー名にカーソルを置くと履歴ポップアップが開きます。
+- 履歴ポップアップ内のアカウントIDをクリックすると、そのKickアカウントページを新規タブで開きます。
 - 「固定」を押すとポップアップを固定できます。
 - 固定ポップアップはヘッダー部分をドラッグして移動できます。
 - 閉じるボタンで固定ポップアップを閉じられます。
@@ -213,6 +214,7 @@ Edge and Brave support unpacked Chromium extensions.
 ### Usage
 
 - Hover over a chat username to open the history popup.
+- Click the account ID inside the history popup to open that Kick account page in a new tab.
 - Click Fixed to pin the popup.
 - Drag a pinned popup by its header.
 - Close a pinned popup with the close button.

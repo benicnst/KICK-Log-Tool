@@ -906,7 +906,7 @@
   const popover = createPopover();
 
   window.__KICK_CHAT_HISTORY_HOVER__ = {
-    version: "2.51.0",
+    version: "2.52.0",
     getChatRootCount: () => getChatRoots().length,
     getKnownUsers: () => [...userHistory.values()].map((value) => ({
       username: value.displayName,
@@ -962,7 +962,7 @@
       <div class="kch-popover__header">
         <div class="kch-popover__identity">
           <div class="kch-popover__name">
-            <span class="kch-popover__name-text"></span>
+            <button class="kch-popover__name-text" type="button"></button>
             <button class="kch-popover__pin" type="button"></button>
           </div>
         </div>
@@ -977,7 +977,10 @@
 
     const risk = assessAccountRisk(messages);
     const nameElement = targetPopover.querySelector(".kch-popover__name");
-    targetPopover.querySelector(".kch-popover__name-text").textContent = displayName;
+    const nameButton = targetPopover.querySelector(".kch-popover__name-text");
+    nameButton.textContent = displayName;
+    nameButton.title = `${displayName} のKickページを開く`;
+    nameButton.setAttribute("aria-label", `${displayName} のKickページを開く`);
     if (risk.suspicious) {
       const marker = document.createElement("span");
       marker.className = "kch-popover__risk";
@@ -1480,6 +1483,12 @@
         return;
       }
 
+      if (target.closest(".kch-popover__name-text")) {
+        event.preventDefault();
+        openKickProfile(key);
+        return;
+      }
+
       if (target.closest(".kch-popover__close")) {
         event.preventDefault();
         closePinnedCard(key);
@@ -1624,6 +1633,13 @@
     } else {
       showPopoverNotice(`入力欄が見つかりません。手動で送信: ${command}`);
     }
+  }
+
+  function openKickProfile(username) {
+    const normalized = normalizeUsername(username);
+    if (!normalized) return;
+
+    window.open(getKickProfileUrl(normalized), "_blank", "noopener,noreferrer");
   }
 
   function setChatInputValue(value) {
@@ -2071,6 +2087,12 @@
       event.preventDefault();
       if (!hasModerationAccess()) return;
       applyModerationCommand(activeUsername, "ban");
+      return;
+    }
+
+    if (target.closest(".kch-popover__name-text")) {
+      event.preventDefault();
+      openKickProfile(activeUsername);
       return;
     }
 

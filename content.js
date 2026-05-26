@@ -43,6 +43,7 @@
   const pinnedCards = new Map();
   const autoPinnedUsers = new Set();
   const autoPinDismissedUsers = new Set();
+  const suspiciousUsers = new Map();
   const apiWindowCache = new Set();
   const pinnedApiCheckingUsers = new Set();
   const userBackfillState = new Map();
@@ -87,6 +88,7 @@
   let routeResetInProgress = false;
   let pinnedDragState = null;
   let popoverShownAt = 0;
+  let suspiciousReportTimer = 0;
 
   const USERNAME_SELECTOR = [
     "[data-chat-entry-user]",
@@ -710,7 +712,7 @@
     pruneUsers();
     scheduleSave();
     if (!duplicate || messageSource === "api") refreshActivePopover(key);
-    if (!duplicate) maybeAutoPinSuspiciousUser(key, existing.displayName, messageSource, resolvedTimestampKind);
+    if (!duplicate) handleSuspiciousUserCandidate(key, existing.displayName, messageSource, resolvedTimestampKind);
     return !duplicate;
   }
 
@@ -902,12 +904,13 @@
   const popover = createPopover();
 
   window.__KICK_CHAT_HISTORY_HOVER__ = {
-    version: "2.48.0",
+    version: "2.49.0",
     getChatRootCount: () => getChatRoots().length,
     getKnownUsers: () => [...userHistory.values()].map((value) => ({
       username: value.displayName,
       messages: value.messages.length
     })),
+    getSuspiciousUsers: () => getSuspiciousUserList(),
     getStatus: () => ({
       chatRoots: getChatRoots().length,
       knownUsers: userHistory.size,
@@ -933,6 +936,8 @@
       refreshAllPopovers();
     }
   };
+  installRuntimeMessageListener();
+  sendSuspiciousUsersReset();
 
   function renderPopover(username, anchor) {
     renderPopoverContent(popover, username, false);
@@ -1295,19 +1300,139 @@
     };
   }
 
-  function maybeAutoPinSuspiciousUser(key, username, messageSource, timestampKind) {
+  function handleSuspiciousUserCandidate(key, username, messageSource, timestampKind) {
     if (routeResetInProgress) return;
     if (messageSource !== "realtime") return;
     if (normalizeTimestampKind(timestampKind) !== "posted") return;
-    if (pinnedCards.has(key) || autoPinnedUsers.has(key) || autoPinDismissedUsers.has(key)) return;
-    if (pinnedCards.size >= MAX_PINNED_POPOVERS) return;
 
     const history = userHistory.get(key);
     const risk = assessAccountRisk(history?.messages || []);
     if (!risk.suspicious) return;
 
+    rememberSuspiciousUser(key, username, risk, history?.messages || []);
+    if (pinnedCards.has(key) || autoPinnedUsers.has(key) || autoPinDismissedUsers.has(key)) return;
+    if (pinnedCards.size >= MAX_PINNED_POPOVERS) return;
+
     if (pinUser(username, { auto: true })) {
       autoPinnedUsers.add(key);
+    }
+  }
+
+  function rememberSuspiciousUser(key, username, risk, messages) {
+    const existing = suspiciousUsers.get(key);
+    const postedMessages = messages
+      .filter((message) => message?.text && message?.timestamp)
+      .filter((message) => getMessageTimestampKind(message) === "posted")
+      .sort((a, b) => b.timestamp - a.timestamp);
+    const latestMessage = postedMessages[0] || null;
+    const now = Date.now();
+
+    suspiciousUsers.set(key, {
+      username,
+      profileUrl: getKickProfileUrl(username),
+      reasons: [...risk.reasons],
+      firstDetectedAt: existing?.firstDetectedAt || now,
+      lastDetectedAt: now,
+      lastCommentAt: latestMessage?.timestamp || now,
+      messageCount: postedMessages.length,
+      lastMessage: cleanText(latestMessage?.text || "").slice(0, 180)
+    });
+
+    scheduleSuspiciousUsersReport();
+  }
+
+  function getKickProfileUrl(username) {
+    return `${API_ORIGIN}/${encodeURIComponent(String(username || "").replace(/^@/, ""))}`;
+  }
+
+  function getSuspiciousUserList() {
+    return [...suspiciousUsers.values()]
+      .sort((a, b) => b.lastDetectedAt - a.lastDetectedAt)
+      .map((user) => ({
+        ...user,
+        reasons: [...user.reasons]
+      }));
+  }
+
+  function getSuspiciousReportPayload() {
+    return {
+      channelSlug: activeChannelSlug || streamContext?.slug || getChannelSlug(),
+      pageUrl: location.href,
+      updatedAt: Date.now(),
+      users: getSuspiciousUserList()
+    };
+  }
+
+  function scheduleSuspiciousUsersReport() {
+    if (suspiciousReportTimer) return;
+    suspiciousReportTimer = window.setTimeout(() => {
+      suspiciousReportTimer = 0;
+      sendSuspiciousUsersReport();
+    }, 350);
+  }
+
+  function sendSuspiciousUsersReport() {
+    sendRuntimeMessage({
+      type: "KLT_SUSPICIOUS_USERS_UPDATED",
+      payload: getSuspiciousReportPayload()
+    });
+  }
+
+  function sendSuspiciousUsersReset() {
+    sendRuntimeMessage({ type: "KLT_SUSPICIOUS_USERS_RESET" });
+  }
+
+  function sendRuntimeMessage(message) {
+    if (!hasRuntimeMessaging()) return;
+
+    try {
+      chrome.runtime.sendMessage(message, () => {
+        void chrome.runtime.lastError;
+      });
+    } catch (_error) {
+      // Extension contexts can be invalidated during reloads.
+    }
+  }
+
+  function hasRuntimeMessaging() {
+    try {
+      return Boolean(globalThis.chrome?.runtime?.id && globalThis.chrome?.runtime?.sendMessage);
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  function installRuntimeMessageListener() {
+    if (!hasRuntimeMessaging()) return;
+
+    try {
+      chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+        if (!message || typeof message !== "object") return false;
+
+        if (message.type === "KLT_GET_SUSPICIOUS_USERS") {
+          sendResponse({
+            ok: true,
+            report: getSuspiciousReportPayload()
+          });
+          return true;
+        }
+
+        if (message.type === "KLT_CLEAR_SUSPICIOUS_USERS") {
+          suspiciousUsers.clear();
+          clearTimeout(suspiciousReportTimer);
+          suspiciousReportTimer = 0;
+          sendSuspiciousUsersReport();
+          sendResponse({
+            ok: true,
+            report: getSuspiciousReportPayload()
+          });
+          return true;
+        }
+
+        return false;
+      });
+    } catch (_error) {
+      // Runtime messaging is optional for unpacked reloads.
     }
   }
 
@@ -2060,6 +2185,10 @@
     pinnedApiCheckingUsers.clear();
     autoPinnedUsers.clear();
     autoPinDismissedUsers.clear();
+    suspiciousUsers.clear();
+    clearTimeout(suspiciousReportTimer);
+    suspiciousReportTimer = 0;
+    sendSuspiciousUsersReset();
     pinnedApiChecking = false;
     timestampCorrectionRunning = false;
     realtimeTimestampTrustReadyAt = Date.now() + REALTIME_TIMESTAMP_TRUST_DELAY_MS;
@@ -2718,6 +2847,10 @@
     if (scanInterval) window.clearInterval(scanInterval);
     if (pinnedApiInterval) window.clearInterval(pinnedApiInterval);
     pendingTimestampCorrections.clear();
+    suspiciousUsers.clear();
+    clearTimeout(suspiciousReportTimer);
+    suspiciousReportTimer = 0;
+    sendSuspiciousUsersReset();
     observer.disconnect();
   }, { once: true });
 

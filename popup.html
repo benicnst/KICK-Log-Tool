@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>KICK Log Tool</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main class="klt-popup">
+      <header class="klt-popup__header">
+        <div>
+          <h1>KICK Log Tool</h1>
+          <p id="summary">検出状況を読み込み中...</p>
+        </div>
+        <button id="clear" class="klt-popup__clear" type="button" disabled>クリア</button>
+      </header>
+      <section id="list" class="klt-popup__list" aria-live="polite"></section>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

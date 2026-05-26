@@ -24,6 +24,10 @@
   const REALTIME_TIMESTAMP_TRUST_DELAY_MS = 8000;
   const REALTIME_TIMESTAMP_MAX_ROWS = 3;
   const EMOTE_PLACEHOLDER = "[emote]";
+  const MASS_REPEAT_MIN_LENGTH = 24;
+  const MASS_REPEAT_STRONG_LENGTH = 80;
+  const EMOTE_SPAM_MIN_COUNT = 12;
+  const EMOTE_SPAM_STRONG_COUNT = 20;
   const BACKFILL_WINDOW_OFFSETS_MINUTES = [
     1, 2, 4, 8, 15, 30, 45, 60, 90, 120, 180, 240
   ];
@@ -37,6 +41,8 @@
 
   const userHistory = new Map();
   const pinnedCards = new Map();
+  const autoPinnedUsers = new Set();
+  const autoPinDismissedUsers = new Set();
   const apiWindowCache = new Set();
   const pinnedApiCheckingUsers = new Set();
   const userBackfillState = new Map();
@@ -704,6 +710,7 @@
     pruneUsers();
     scheduleSave();
     if (!duplicate || messageSource === "api") refreshActivePopover(key);
+    if (!duplicate) maybeAutoPinSuspiciousUser(key, existing.displayName, messageSource, resolvedTimestampKind);
     return !duplicate;
   }
 
@@ -895,7 +902,7 @@
   const popover = createPopover();
 
   window.__KICK_CHAT_HISTORY_HOVER__ = {
-    version: "2.47.0",
+    version: "2.48.0",
     getChatRootCount: () => getChatRoots().length,
     getKnownUsers: () => [...userHistory.values()].map((value) => ({
       username: value.displayName,
@@ -1202,45 +1209,106 @@
     pinUser(activeUsername);
   }
 
-  function pinUser(username) {
+  function pinUser(username, options = {}) {
     const key = normalizeUsername(username);
-    if (!key) return;
+    if (!key) return false;
+    const auto = options.auto === true;
+    if (!auto) autoPinDismissedUsers.delete(key);
 
     if (pinnedCards.has(key)) {
       const existing = pinnedCards.get(key);
       existing.element.hidden = false;
       existing.element.style.zIndex = String(2147483647);
-      return;
+      return true;
     }
 
     if (pinnedCards.size >= MAX_PINNED_POPOVERS) {
-      showPopoverNotice(`固定できるのは最大${MAX_PINNED_POPOVERS}人までです。`);
-      return;
+      if (!auto) showPopoverNotice(`固定できるのは最大${MAX_PINNED_POPOVERS}人までです。`);
+      return false;
     }
 
     clearTimeout(hideTimer);
     const card = createPopover();
     card.hidden = false;
+    card.style.visibility = "hidden";
     card.classList.add("kch-popover--pinned");
 
-    const sourceRect = popover.getBoundingClientRect();
     const index = pinnedCards.size;
-    const position = {
-      left: Math.min(sourceRect.left + index * 18, window.innerWidth - 280),
-      top: Math.min(sourceRect.top + index * 18, window.innerHeight - 220)
-    };
-
     pinnedCards.set(key, {
       element: card,
       username,
-      position
+      position: { left: 10, top: 10 },
+      autoPinned: auto
     });
     attachPinnedCardEvents(card);
     renderPinnedCard(key);
+    const position = getInitialPinnedPosition(card, index, auto);
+    pinnedCards.get(key).position = position;
     setElementPosition(card, position.left, position.top, key);
+    card.style.visibility = "";
+    if (auto) {
+      card.classList.add("kch-popover--auto-pinned");
+      window.setTimeout(() => {
+        card.classList.remove("kch-popover--auto-pinned");
+      }, 520);
+    }
     updatePinnedApiRefresh();
     fetchPinnedApiUpdates();
-    closeHoverPopover();
+    if (!auto) closeHoverPopover();
+    return true;
+  }
+
+  function getInitialPinnedPosition(card, index, auto) {
+    const cardRect = card.getBoundingClientRect();
+    const cardWidth = cardRect.width || 254;
+    const cardHeight = cardRect.height || 220;
+    const offset = index * 18;
+
+    if (auto) {
+      const chatRoot = getChatRoots()[0];
+      const chatRect = chatRoot?.getBoundingClientRect();
+      if (chatRect && chatRect.width > 0 && chatRect.height > 0) {
+        const leftOfChat = chatRect.left - cardWidth - 12;
+        return {
+          left: leftOfChat >= 10 ? leftOfChat - offset : window.innerWidth - cardWidth - 14 - offset,
+          top: Math.min(chatRect.top + 48 + offset, window.innerHeight - cardHeight - 10)
+        };
+      }
+
+      return {
+        left: window.innerWidth - cardWidth - 14 - offset,
+        top: 76 + offset
+      };
+    }
+
+    const sourceRect = !popover.hidden ? popover.getBoundingClientRect() : null;
+    if (sourceRect && sourceRect.width > 0 && sourceRect.height > 0) {
+      return {
+        left: Math.min(sourceRect.left + offset, window.innerWidth - cardWidth - 10),
+        top: Math.min(sourceRect.top + offset, window.innerHeight - cardHeight - 10)
+      };
+    }
+
+    return {
+      left: window.innerWidth - cardWidth - 14 - offset,
+      top: 76 + offset
+    };
+  }
+
+  function maybeAutoPinSuspiciousUser(key, username, messageSource, timestampKind) {
+    if (routeResetInProgress) return;
+    if (messageSource !== "realtime") return;
+    if (normalizeTimestampKind(timestampKind) !== "posted") return;
+    if (pinnedCards.has(key) || autoPinnedUsers.has(key) || autoPinDismissedUsers.has(key)) return;
+    if (pinnedCards.size >= MAX_PINNED_POPOVERS) return;
+
+    const history = userHistory.get(key);
+    const risk = assessAccountRisk(history?.messages || []);
+    if (!risk.suspicious) return;
+
+    if (pinUser(username, { auto: true })) {
+      autoPinnedUsers.add(key);
+    }
   }
 
   function showPopoverNotice(message) {
@@ -1328,6 +1396,8 @@
     if (!card) return;
     card.element.remove();
     pinnedCards.delete(key);
+    autoPinnedUsers.delete(key);
+    autoPinDismissedUsers.add(key);
     updatePinnedApiRefresh();
   }
 
@@ -1336,6 +1406,7 @@
       card.element.remove();
     }
     pinnedCards.clear();
+    autoPinnedUsers.clear();
     updatePinnedApiRefresh();
   }
 
@@ -1516,17 +1587,18 @@
   }
 
   function assessAccountRisk(messages) {
-    const normalizedMessages = messages
+    const riskMessages = messages
       .filter((message) => message?.text && message?.timestamp)
       .filter((message) => getMessageTimestampKind(message) === "posted")
       .map((message) => ({
+        rawText: String(message.text || ""),
         text: normalizeMessageForRisk(message.text),
         timestamp: message.timestamp,
         source: message.source || (message.id ? "api" : "dom")
       }))
-      .filter((message) => message.text);
+      .filter((message) => message.text || message.rawText);
 
-    if (normalizedMessages.length < 4) {
+    if (riskMessages.length < 2) {
       return {
         suspicious: false,
         reasons: []
@@ -1534,8 +1606,8 @@
     }
 
     const reasons = [];
-    const sorted = dedupeRiskMessages(normalizedMessages).sort((a, b) => b.timestamp - a.timestamp);
-    if (sorted.length < 4) {
+    const sorted = dedupeRiskMessages(riskMessages).sort((a, b) => b.timestamp - a.timestamp);
+    if (sorted.length < 2) {
       return {
         suspicious: false,
         reasons: []
@@ -1560,6 +1632,10 @@
       reasons.push("同一コメントを3回以上");
     }
 
+    if (![...counts.values()].some((count) => count >= 3) && hasRepeatedLongComment(counts)) {
+      reasons.push("同一長文コメントを2回以上");
+    }
+
     const intervals = [];
     for (let index = 1; index < sorted.length; index += 1) {
       intervals.push(Math.abs(sorted[index - 1].timestamp - sorted[index].timestamp));
@@ -1567,6 +1643,10 @@
 
     if (hasBurstWindow(sorted, 3, 2000)) {
       reasons.push("2秒以内に3コメント以上");
+    }
+
+    if (hasBurstWindow(sorted, 5, 10000)) {
+      reasons.push("10秒以内に5コメント以上");
     }
 
     const averageInterval = intervals.reduce((total, value) => total + value, 0) / Math.max(intervals.length, 1);
@@ -1577,6 +1657,18 @@
     const urlLikeCount = sorted.filter((message) => /https?:\/\/|www\.|\.com\b|\.net\b|\.org\b/i.test(message.text)).length;
     if (urlLikeCount >= 3) {
       reasons.push("URL風コメントが多い");
+    }
+
+    const massRepeatCount = sorted.filter((message) => hasMassRepeatedText(message.rawText)).length;
+    const strongMassRepeat = sorted.some((message) => hasMassRepeatedText(message.rawText) && cleanText(message.rawText).length >= MASS_REPEAT_STRONG_LENGTH);
+    if (massRepeatCount >= 2 || strongMassRepeat) {
+      reasons.push("長文/語句の大量反復");
+    }
+
+    const emoteSpamCount = sorted.filter((message) => isEmoteSpamText(message.rawText)).length;
+    const strongEmoteSpam = sorted.some((message) => countEmoteLikeTokens(message.rawText) >= EMOTE_SPAM_STRONG_COUNT);
+    if (emoteSpamCount >= 2 || strongEmoteSpam) {
+      reasons.push("絵文字/スタンプ大量");
     }
 
     return {
@@ -1609,6 +1701,61 @@
       .replace(/\d+/g, "0")
       .replace(/[!?！？。、,.…~ーｰｗw\s]+/g, "")
       .trim();
+  }
+
+  function hasRepeatedLongComment(counts) {
+    return [...counts.entries()].some(([text, count]) => count >= 2 && text.length >= MASS_REPEAT_MIN_LENGTH);
+  }
+
+  function hasMassRepeatedText(text) {
+    const compact = cleanText(text).replace(/\s+/g, "");
+    if (compact.length < MASS_REPEAT_MIN_LENGTH) return false;
+
+    if (/(.)\1{5,}/u.test(compact)) return true;
+
+    const maxPhraseLength = Math.min(16, Math.floor(compact.length / 3));
+    for (let length = 2; length <= maxPhraseLength; length += 1) {
+      const phrase = compact.slice(0, length);
+      if (!phrase.trim()) continue;
+
+      const count = countNonOverlappingOccurrences(compact, phrase);
+      if (count >= 3 && phrase.length * count >= Math.min(compact.length * 0.55, MASS_REPEAT_STRONG_LENGTH)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  function countNonOverlappingOccurrences(text, phrase) {
+    if (!phrase) return 0;
+
+    let count = 0;
+    let index = 0;
+    while (index < text.length) {
+      const foundAt = text.indexOf(phrase, index);
+      if (foundAt === -1) break;
+      count += 1;
+      index = foundAt + phrase.length;
+    }
+
+    return count;
+  }
+
+  function isEmoteSpamText(text) {
+    const tokenCount = countEmoteLikeTokens(text);
+    if (tokenCount >= EMOTE_SPAM_MIN_COUNT) return true;
+
+    const compact = cleanText(text).replace(/\s+/g, "");
+    return tokenCount >= 6 && compact.length >= MASS_REPEAT_STRONG_LENGTH;
+  }
+
+  function countEmoteLikeTokens(text) {
+    const value = String(text || "");
+    const emojiCount = [...value].filter((char) => /\p{Extended_Pictographic}/u.test(char)).length;
+    const emotePlaceholderCount = (value.match(/\[emote\]/gi) || []).length;
+    const namedEmoteCount = (value.match(/:[A-Za-z0-9_.-]{2,32}:/g) || []).length;
+    return emojiCount + emotePlaceholderCount + namedEmoteCount;
   }
 
   function hasBurstWindow(sortedMessages, requiredCount, windowMs) {
@@ -1911,6 +2058,8 @@
     userBackfillState.clear();
     pendingTimestampCorrections.clear();
     pinnedApiCheckingUsers.clear();
+    autoPinnedUsers.clear();
+    autoPinDismissedUsers.clear();
     pinnedApiChecking = false;
     timestampCorrectionRunning = false;
     realtimeTimestampTrustReadyAt = Date.now() + REALTIME_TIMESTAMP_TRUST_DELAY_MS;

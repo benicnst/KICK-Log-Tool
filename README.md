@@ -25,6 +25,7 @@ This project is not affiliated with, endorsed by, or sponsored by Kick.
 - チャット一時停止を解除すると、API確認ではなくチャット表示欄のリアルタイム取得に戻ります。
 - API確認中は固定ユーザー名の横に回転するリロードマークを表示します。
 - 複数の不審な投稿パターンに該当した場合、ユーザー名横にドクロマークを表示します。
+- ドクロマーク判定に該当したユーザーは、最大3人まで自動でポップアップ固定されます。
 - 任意でモデレーション用コマンドボタンを表示できます。初期状態では非表示です。
 
 ### Chromeへのインストール方法
@@ -68,9 +69,15 @@ EdgeとBraveもChromium系ブラウザのため、未パッケージ拡張機能
 - 60秒以内に5件以上コメントしている。
 - 120秒以内に8件以上コメントしている。
 - 正規化後の同一コメントが3回以上ある。
+- 正規化後の同一長文コメントが2回以上ある。
 - 2秒以内に3件以上コメントしている。
+- 10秒以内に5件以上コメントしている。
 - 6件以上のコメントがあり、平均投稿間隔が8秒以下。
 - URL風コメントが3件以上ある。
+- 1コメント内で同じ語句を大量に繰り返している。
+- 絵文字やスタンプ系の文字列を大量に投稿している。
+
+ドクロマーク判定に該当したユーザーは最大3人まで自動でポップアップ固定されます。閉じたユーザーは、その配信中は自動固定されません。手動でピン留めした場合は再び固定できます。
 
 誤判定になり得る例:
 
@@ -169,6 +176,7 @@ GitHub Releaseには、`dist/KICK-Log-Tool.zip`をアップロードしてくだ
 - Returns to DOM-based realtime capture after chat pause is released.
 - Shows a rotating reload icon next to pinned users while API checking is active.
 - Shows a skull marker when multiple suspicious posting patterns are detected.
+- Automatically pins up to 3 popups when users match the skull-marker conditions.
 - Provides optional moderation command buttons, disabled by default.
 
 ### Install In Chrome
@@ -212,9 +220,15 @@ The marker is shown only when 2 or more of these conditions are true:
 - 5 or more comments within 60 seconds.
 - 8 or more comments within 120 seconds.
 - The same normalized comment appears 3 or more times.
+- The same normalized long comment appears 2 or more times.
 - 3 or more comments appear within 2 seconds.
+- 5 or more comments appear within 10 seconds.
 - The average interval between captured comments is 8 seconds or less, with at least 6 comments.
 - 3 or more URL-like comments are detected.
+- One comment contains heavy repeated phrases.
+- A comment contains a large amount of emoji or emote-like content.
+
+When a user matches the skull-marker conditions, the popup is automatically pinned, up to 3 users at a time. If you close an automatically pinned user, it will not be auto-pinned again during that stream. You can still pin that user manually.
 
 Examples that can still be false positives:
 

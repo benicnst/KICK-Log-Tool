@@ -6,6 +6,8 @@
   const GET_BACKGROUND_REPORT_TYPE = "KLT_GET_SUSPICIOUS_REPORT";
   const CLEAR_BACKGROUND_REPORT_TYPE = "KLT_CLEAR_SUSPICIOUS_REPORT";
   const SETTINGS_STORAGE_KEY = "klt:settings:v1";
+  const MAX_LIST_USERS = 200;
+  const MAX_BROADCASTER_LIST_USERS = 500;
   const ALERT_ACTIONS = new Set(["notify", "temporary", "auto-pin", "off"]);
   const DEFAULT_SETTINGS = {
     alertAction: "auto-pin",
@@ -55,6 +57,12 @@
 
   function bindEvents() {
     clearButton.addEventListener("click", clearDetectedUsers);
+
+    chrome.storage.onChanged.addListener((changes, areaName) => {
+      if (areaName !== "local" || !changes[SETTINGS_STORAGE_KEY]) return;
+      settings = normalizeSettings(changes[SETTINGS_STORAGE_KEY].newValue);
+      renderSettings();
+    });
 
     list.addEventListener("click", (event) => {
       const button = event.target.closest(".klt-popup__item");
@@ -323,11 +331,11 @@
       broadcasterListEnabled: next.broadcasterListEnabled !== false,
       watchlist: normalizeUsernameList(next.watchlist),
       ignorelist: normalizeUsernameList(next.ignorelist),
-      broadcasterList: normalizeUsernameList(next.broadcasterList)
+      broadcasterList: normalizeUsernameList(next.broadcasterList, MAX_BROADCASTER_LIST_USERS)
     };
   }
 
-  function normalizeUsernameList(values) {
+  function normalizeUsernameList(values, limit = MAX_LIST_USERS) {
     if (!Array.isArray(values)) return [];
 
     const seen = new Set();
@@ -339,7 +347,7 @@
       list.push(username);
     }
 
-    return list.slice(0, 200);
+    return list.slice(0, limit);
   }
 
   function addUsernameToList(baseSettings, listKey, username) {

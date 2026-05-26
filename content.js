@@ -15,6 +15,9 @@
   const HOVER_HIDE_DELAY_MS = 160;
   const HOVER_BRIDGE_MARGIN = 6;
   const AUTO_TEMPORARY_POPUP_MS = 4500;
+  const FOLLOWED_CHANNELS_REFRESH_MS = 10 * 60 * 1000;
+  const FOLLOWED_CHANNELS_MAX_PAGES = 5;
+  const MAX_BROADCASTER_LIST_USERS = 500;
   const PINNED_API_REFRESH_MS = 15 * 1000;
   const PINNED_API_LOOKBACK_WINDOWS = 2;
   const BACKFILL_RETRY_MS = 45 * 1000;
@@ -104,6 +107,9 @@
   let popoverShownAt = 0;
   let suspiciousReportTimer = 0;
   let userSettings = { ...DEFAULT_SETTINGS };
+  let followedChannelsSyncTimer = 0;
+  let followedChannelsSyncRunning = false;
+  let lastFollowedChannelsSyncAt = 0;
 
   const USERNAME_SELECTOR = [
     "[data-chat-entry-user]",
@@ -204,11 +210,11 @@
       broadcasterListEnabled: settings.broadcasterListEnabled !== false,
       watchlist: normalizeUsernameList(settings.watchlist),
       ignorelist: normalizeUsernameList(settings.ignorelist),
-      broadcasterList: normalizeUsernameList(settings.broadcasterList)
+      broadcasterList: normalizeUsernameList(settings.broadcasterList, MAX_BROADCASTER_LIST_USERS)
     };
   }
 
-  function normalizeUsernameList(values) {
+  function normalizeUsernameList(values, limit = 200) {
     if (!Array.isArray(values)) return [];
 
     const seen = new Set();
@@ -222,7 +228,7 @@
       list.push(key);
     }
 
-    return list.slice(0, 200);
+    return list.slice(0, limit);
   }
 
   function getAlertAction() {
@@ -1021,7 +1027,7 @@
   const popover = createPopover();
 
   window.__KICK_CHAT_HISTORY_HOVER__ = {
-    version: "2.56.0",
+    version: "2.57.0",
     getChatRootCount: () => getChatRoots().length,
     getKnownUsers: () => [...userHistory.values()].map((value) => ({
       username: value.displayName,
@@ -1038,6 +1044,12 @@
       apiWindows: apiWindowCache.size,
       pinnedApiChecking,
       pinnedApiUsers: [...pinnedCards.keys()],
+      followedChannelsSync: {
+        enabled: userSettings.broadcasterListEnabled,
+        running: followedChannelsSyncRunning,
+        lastSyncedAt: lastFollowedChannelsSyncAt,
+        broadcasterListSize: userSettings.broadcasterList.length
+      },
       chatPaused: isChatPaused(),
       apiDebug
     }),
@@ -1621,6 +1633,211 @@
     } catch (_error) {
       // Runtime messaging is optional for unpacked reloads.
     }
+  }
+
+  function getVisibleFollowingUsernames() {
+    const usernames = new Map();
+
+    for (const label of getFollowingLabelElements()) {
+      const labelRect = label.getBoundingClientRect();
+      const root = getFollowingSearchRoot(label);
+      const bottom = getFollowingSectionBottom(label, root);
+
+      for (const link of root.querySelectorAll("a[href]")) {
+        if (!isVisibleElement(link)) continue;
+        const rect = link.getBoundingClientRect();
+        if (rect.bottom <= labelRect.bottom || rect.top >= bottom) continue;
+
+        const username = getUsernameFromProfileLink(link);
+        const key = normalizeUsername(username);
+        if (!key) continue;
+        if (!looksLikeUsernameToken(username, { allowNumericOnly: true })) continue;
+        usernames.set(key, username);
+      }
+    }
+
+    return [...usernames.keys()].slice(0, MAX_BROADCASTER_LIST_USERS);
+  }
+
+  function getFollowingLabelElements() {
+    return [...document.querySelectorAll("h1,h2,h3,h4,h5,span,div,p,button")]
+      .filter((element) => {
+        if (!isVisibleElement(element)) return false;
+        const text = cleanText(element.innerText || element.textContent);
+        if (!text || text.length > 40) return false;
+        return /フォロー中|following/i.test(text);
+      });
+  }
+
+  function getFollowingSearchRoot(label) {
+    let current = label;
+    let best = label.parentElement || document.body;
+
+    for (let depth = 0; current && current !== document.documentElement && depth < 10; depth += 1) {
+      if (current.querySelectorAll?.("a[href]").length > 0) {
+        best = current;
+      }
+
+      const rect = current.getBoundingClientRect?.();
+      if (rect && rect.height > window.innerHeight * 0.45 && rect.width <= 520) {
+        return current;
+      }
+
+      current = current.parentElement;
+    }
+
+    return best || document.body;
+  }
+
+  function getFollowingSectionBottom(label, root) {
+    const labelRect = label.getBoundingClientRect();
+    const rootRect = root.getBoundingClientRect?.() || {
+      bottom: window.innerHeight
+    };
+    const stopPatterns = /おすすめ|recommended|suggested|popular|browse/i;
+    const candidates = [...root.querySelectorAll("h1,h2,h3,h4,h5,span,div,p,button")]
+      .filter((element) => {
+        if (element === label || !isVisibleElement(element)) return false;
+        const text = cleanText(element.innerText || element.textContent);
+        if (!text || text.length > 50 || !stopPatterns.test(text)) return false;
+        const rect = element.getBoundingClientRect();
+        return rect.top > labelRect.bottom && Math.abs(rect.left - labelRect.left) < 180;
+      })
+      .map((element) => element.getBoundingClientRect().top)
+      .sort((a, b) => a - b);
+
+    return candidates[0] || rootRect.bottom || window.innerHeight;
+  }
+
+  function scheduleFollowedChannelsSync(delay = 0) {
+    clearTimeout(followedChannelsSyncTimer);
+    if (!userSettings.broadcasterListEnabled) return;
+
+    followedChannelsSyncTimer = window.setTimeout(() => {
+      followedChannelsSyncTimer = 0;
+      syncFollowedChannels();
+    }, delay);
+  }
+
+  async function syncFollowedChannels() {
+    if (!userSettings.broadcasterListEnabled || followedChannelsSyncRunning) return;
+    if (Date.now() - lastFollowedChannelsSyncAt < FOLLOWED_CHANNELS_REFRESH_MS) return;
+
+    followedChannelsSyncRunning = true;
+    try {
+      const apiUsernames = await fetchFollowedChannelUsernames();
+      const usernames = normalizeUsernameList(
+        apiUsernames.length ? apiUsernames : getVisibleFollowingUsernames(),
+        MAX_BROADCASTER_LIST_USERS
+      );
+      if (!usernames.length) return;
+
+      await mergeBroadcasterList(usernames);
+    } finally {
+      lastFollowedChannelsSyncAt = Date.now();
+      followedChannelsSyncRunning = false;
+    }
+  }
+
+  async function fetchFollowedChannelUsernames() {
+    let url = `${API_ORIGIN}/api/v1/channels/followed`;
+    const usernames = [];
+
+    for (let page = 0; page < FOLLOWED_CHANNELS_MAX_PAGES && url; page += 1) {
+      try {
+        const response = await fetch(url, {
+          credentials: "include",
+          headers: {
+            "Accept": "application/json"
+          }
+        });
+
+        if (!response.ok) return usernames;
+
+        const data = await response.json();
+        usernames.push(...extractFollowedChannelUsernames(data));
+        url = getNextFollowedChannelsUrl(data);
+      } catch (_error) {
+        return usernames;
+      }
+    }
+
+    return usernames;
+  }
+
+  function extractFollowedChannelUsernames(data) {
+    const items = getFollowedChannelItems(data);
+    const usernames = [];
+
+    for (const item of items) {
+      const channel = item?.channel || item?.streamer || item?.user || item;
+      const username = cleanText(
+        channel?.slug ||
+        channel?.username ||
+        channel?.user?.username ||
+        channel?.user?.slug ||
+        item?.slug ||
+        item?.username
+      ).replace(/^@/, "");
+      if (looksLikeUsernameToken(username, { allowNumericOnly: true })) usernames.push(username);
+    }
+
+    return usernames;
+  }
+
+  function getFollowedChannelItems(data) {
+    if (Array.isArray(data)) return data;
+    if (!data || typeof data !== "object") return [];
+
+    const candidates = [
+      data.channels,
+      data.followed_channels,
+      data.followedChannels,
+      data.data,
+      data.data?.channels,
+      data.data?.followed_channels,
+      data.results,
+      data.items
+    ];
+
+    return candidates.find((value) => Array.isArray(value)) || [];
+  }
+
+  function getNextFollowedChannelsUrl(data) {
+    if (!data || typeof data !== "object") return "";
+
+    const next = cleanText(
+      data.next_page_url ||
+      data.nextPageUrl ||
+      data.next_page ||
+      data.nextPage ||
+      data.links?.next ||
+      data.meta?.next_page_url ||
+      ""
+    );
+    if (!next || next === "null") return "";
+
+    try {
+      const url = new URL(next, API_ORIGIN);
+      return url.hostname.endsWith("kick.com") ? url.href : "";
+    } catch (_error) {
+      return "";
+    }
+  }
+
+  async function mergeBroadcasterList(usernames) {
+    const merged = normalizeUsernameList([
+      ...userSettings.broadcasterList,
+      ...usernames
+    ], MAX_BROADCASTER_LIST_USERS);
+    if (merged.length === userSettings.broadcasterList.length) return;
+
+    userSettings = normalizeSettings({
+      ...userSettings,
+      broadcasterListEnabled: true,
+      broadcasterList: merged
+    });
+    await writeExtensionStorage(SETTINGS_STORAGE_KEY, userSettings);
   }
 
   function showPopoverNotice(message) {
@@ -2347,6 +2564,7 @@
         userSettings = normalizeSettings(changes[SETTINGS_STORAGE_KEY].newValue);
         applySettingsToDetectedUsers();
         refreshAllPopovers();
+        scheduleFollowedChannelsSync(1000);
       });
     } catch (_error) {
       // Storage events are optional while the extension is being reloaded.
@@ -2368,6 +2586,25 @@
         });
       } catch (_error) {
         resolve({});
+      }
+    });
+  }
+
+  function writeExtensionStorage(key, value) {
+    if (!hasExtensionStorage()) return Promise.resolve();
+
+    return new Promise((resolve) => {
+      try {
+        chrome.storage.local.set({ [key]: value }, () => {
+          if (chrome.runtime.lastError) {
+            resolve();
+            return;
+          }
+
+          resolve();
+        });
+      } catch (_error) {
+        resolve();
       }
     });
   }
@@ -2449,7 +2686,11 @@
     routeResetInProgress = true;
     clearTimeout(saveTimer);
     clearTimeout(hideTimer);
+    clearTimeout(followedChannelsSyncTimer);
     clearTimeout(timestampCorrectionTimer);
+    followedChannelsSyncTimer = 0;
+    followedChannelsSyncRunning = false;
+    lastFollowedChannelsSyncAt = 0;
     timestampCorrectionTimer = 0;
     clearSavedHistory();
 
@@ -2478,6 +2719,7 @@
       await initializeStreamContext();
       loadHistory();
       scanPage();
+      scheduleFollowedChannelsSync(1500);
     } finally {
       routeResetInProgress = false;
     }
@@ -3114,13 +3356,16 @@
   installSettingsListener();
   loadSettings().finally(() => initializeStreamContext()).finally(() => loadHistory()).finally(() => {
     scanPage();
+    scheduleFollowedChannelsSync(1500);
     scanInterval = window.setInterval(periodicRefresh, 2000);
   });
 
   window.addEventListener("pagehide", () => {
     clearTimeout(saveTimer);
     clearTimeout(hideTimer);
+    clearTimeout(followedChannelsSyncTimer);
     clearTimeout(timestampCorrectionTimer);
+    followedChannelsSyncTimer = 0;
     timestampCorrectionTimer = 0;
     clearSavedHistory();
     if (scanInterval) window.clearInterval(scanInterval);

@@ -205,6 +205,134 @@
       .trim();
   }
 
+  function getKickApiHeaders(options = {}) {
+    const headers = {
+      "Accept": "application/json, text/plain, */*",
+      "X-Requested-With": "XMLHttpRequest"
+    };
+
+    const xsrfToken = getCookieValue("XSRF-TOKEN");
+    if (xsrfToken) headers["X-XSRF-TOKEN"] = xsrfToken;
+
+    if (options.includeAuthToken) {
+      const token = getStoredKickAuthToken();
+      if (token) headers.Authorization = `Bearer ${token}`;
+    }
+
+    return headers;
+  }
+
+  function getCookieValue(name) {
+    try {
+      const prefix = `${encodeURIComponent(name)}=`;
+      const match = document.cookie
+        .split(";")
+        .map((part) => part.trim())
+        .find((part) => part.startsWith(prefix));
+      return match ? decodeURIComponent(match.slice(prefix.length)) : "";
+    } catch (_error) {
+      return "";
+    }
+  }
+
+  function getStoredKickAuthToken() {
+    const keys = [
+      "access_token",
+      "accessToken",
+      "auth_token",
+      "authToken",
+      "token",
+      "kick_token",
+      "kickToken",
+      "bearer"
+    ];
+
+    for (const storage of getReadableStorages()) {
+      for (const key of keys) {
+        const token = extractAuthToken(storage.getItem(key));
+        if (token) return token;
+      }
+
+      for (let index = 0; index < storage.length; index += 1) {
+        const key = storage.key(index);
+        if (!key || !/auth|token|session|kick/i.test(key)) continue;
+
+        const token = extractAuthToken(storage.getItem(key));
+        if (token) return token;
+      }
+    }
+
+    return "";
+  }
+
+  function getReadableStorages() {
+    const storages = [];
+
+    try {
+      if (window.localStorage) storages.push(window.localStorage);
+    } catch (_error) {
+      // Storage can be blocked in restricted contexts.
+    }
+
+    try {
+      if (window.sessionStorage) storages.push(window.sessionStorage);
+    } catch (_error) {
+      // Storage can be blocked in restricted contexts.
+    }
+
+    return storages;
+  }
+
+  function extractAuthToken(value, depth = 0) {
+    if (!value || depth > 3) return "";
+
+    if (typeof value === "string") {
+      const text = value.trim().replace(/^["']|["']$/g, "");
+      const bearer = text.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
+      if (isLikelyAuthToken(bearer)) return bearer;
+      if (isLikelyAuthToken(text)) return text;
+
+      if (/^[\[{]/.test(text)) {
+        try {
+          return extractAuthToken(JSON.parse(text), depth + 1);
+        } catch (_error) {
+          return "";
+        }
+      }
+
+      return "";
+    }
+
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const token = extractAuthToken(item, depth + 1);
+        if (token) return token;
+      }
+
+      return "";
+    }
+
+    if (typeof value === "object") {
+      const entries = Object.entries(value);
+      const preferredEntries = entries.filter(([key]) => !/refresh/i.test(key) && /access.*token|auth.*token|bearer|jwt|token/i.test(key));
+      const fallbackEntries = entries.filter(([key]) => !/refresh/i.test(key));
+      for (const [, item] of [...preferredEntries, ...fallbackEntries]) {
+        const token = extractAuthToken(item, depth + 1);
+        if (token) return token;
+      }
+    }
+
+    return "";
+  }
+
+  function isLikelyAuthToken(value) {
+    const text = String(value || "").trim();
+    return text.length >= 20 &&
+      text.length <= 4096 &&
+      !/\s/.test(text) &&
+      /^[A-Za-z0-9._~+/=-]+$/.test(text);
+  }
+
   function normalizeSettings(value) {
     const settings = value && typeof value === "object" ? value : {};
     const alertAction = ALERT_ACTIONS.has(settings.alertAction)
@@ -1047,7 +1175,7 @@
   const popover = createPopover();
 
   window.__KICK_CHAT_HISTORY_HOVER__ = {
-    version: "2.58.0",
+    version: "2.58.1",
     getChatRootCount: () => getChatRoots().length,
     getKnownUsers: () => [...userHistory.values()].map((value) => ({
       username: value.displayName,
@@ -1699,23 +1827,57 @@
         const rect = link.getBoundingClientRect();
         if (rect.bottom <= labelRect.bottom || rect.top >= bottom) continue;
 
-        const username = getUsernameFromProfileLink(link);
-        const key = normalizeUsername(username);
-        if (!key) continue;
-        if (!looksLikeUsernameToken(username, { allowNumericOnly: true })) continue;
-        usernames.set(key, username);
+        rememberVisibleFollowingUsername(usernames, link);
       }
+    }
+
+    if (!usernames.size) {
+      collectSidebarFollowingUsernames(usernames);
     }
 
     return [...usernames.keys()].slice(0, MAX_BROADCASTER_LIST_USERS);
   }
 
+  function rememberVisibleFollowingUsername(usernames, link) {
+    const username = getUsernameFromProfileLink(link);
+    const key = normalizeUsername(username);
+    if (!key) return;
+    if (!looksLikeUsernameToken(username, { allowNumericOnly: true })) return;
+    usernames.set(key, username);
+  }
+
+  function collectSidebarFollowingUsernames(usernames) {
+    const roots = [...document.querySelectorAll("aside,nav,[class*='sidebar' i],[class*='side-bar' i],[data-testid*='sidebar' i]")]
+      .filter((element) => isVisibleElement(element))
+      .filter((element) => {
+        const rect = element.getBoundingClientRect();
+        return rect.left < Math.min(420, window.innerWidth * 0.45) &&
+          rect.width <= 520 &&
+          rect.height >= 160 &&
+          /フォロー中|following/i.test(cleanText(element.innerText || element.textContent));
+      });
+
+    for (const root of roots) {
+      const labels = getFollowingLabelElements().filter((label) => root.contains(label));
+      for (const label of labels) {
+        const labelRect = label.getBoundingClientRect();
+        const bottom = getFollowingSectionBottom(label, root);
+        for (const link of root.querySelectorAll("a[href]")) {
+          if (!isVisibleElement(link)) continue;
+          const rect = link.getBoundingClientRect();
+          if (rect.bottom <= labelRect.bottom || rect.top >= bottom) continue;
+          rememberVisibleFollowingUsername(usernames, link);
+        }
+      }
+    }
+  }
+
   function getFollowingLabelElements() {
-    return [...document.querySelectorAll("h1,h2,h3,h4,h5,span,div,p,button")]
+    return [...document.querySelectorAll("h1,h2,h3,h4,h5,span,div,p,button,a,[role='heading']")]
       .filter((element) => {
         if (!isVisibleElement(element)) return false;
         const text = cleanText(element.innerText || element.textContent);
-        if (!text || text.length > 40) return false;
+        if (!text || text.length > 80) return false;
         return /フォロー中|following/i.test(text);
       });
   }
@@ -1813,10 +1975,10 @@
 
   async function fetchFollowedChannelUsernames() {
     const endpoints = [
-      `${API_ORIGIN}/api/v2/channels/followed?per_page=100`,
-      `${API_ORIGIN}/api/v2/channels/followed`,
       `${API_ORIGIN}/api/v1/channels/followed?per_page=100`,
       `${API_ORIGIN}/api/v1/channels/followed`,
+      `${API_ORIGIN}/api/v2/channels/followed?per_page=100`,
+      `${API_ORIGIN}/api/v2/channels/followed`,
       `${API_ORIGIN}/api/v2/followed-channels?per_page=100`,
       `${API_ORIGIN}/api/v2/followed-channels`,
       `${API_ORIGIN}/api/v1/followed-channels?per_page=100`,
@@ -1824,8 +1986,7 @@
       `${API_ORIGIN}/api/v2/user/following?per_page=100`,
       `${API_ORIGIN}/api/v2/users/self/following?per_page=100`,
       `${API_ORIGIN}/api/v1/user/following?per_page=100`,
-      `${API_ORIGIN}/api/v1/users/self/following?per_page=100`,
-      `${API_ORIGIN}/api/v1/channels/followed`
+      `${API_ORIGIN}/api/v1/users/self/following?per_page=100`
     ];
     const reasons = [];
     let sawLoginRequired = false;
@@ -1856,9 +2017,7 @@
       try {
         const response = await fetch(url, {
           credentials: "include",
-          headers: {
-            "Accept": "application/json"
-          }
+          headers: getKickApiHeaders({ includeAuthToken: true })
         });
 
         if (response.status === 401 || response.status === 403) {
@@ -3039,9 +3198,7 @@
       apiDebug.lastUrl = url;
       const response = await fetch(url, {
         credentials: "include",
-        headers: {
-          "Accept": "application/json"
-        }
+        headers: getKickApiHeaders()
       });
       apiDebug.lastStatus = `channel:${response.status}`;
       if (!response.ok) {
@@ -3403,9 +3560,7 @@
     apiDebug.lastError = "";
     const response = await fetch(url, {
       credentials: "include",
-      headers: {
-        "Accept": "application/json"
-      }
+      headers: getKickApiHeaders()
     });
     apiDebug.lastStatus = `messages:${response.status}`;
     if (!response.ok) {

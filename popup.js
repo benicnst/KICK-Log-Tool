@@ -57,7 +57,7 @@
   const mainView = document.querySelector("#main-view");
   const settingsView = document.querySelector("#settings-view");
   const actionGroups = [...document.querySelectorAll("[data-alert-action]")];
-  const maxPinnedGroup = document.querySelector("#max-pinned-popovers");
+  const maxPinnedSelect = document.querySelector("#max-pinned-popovers");
   const broadcasterSyncStatus = document.querySelector("#broadcaster-sync-status");
   let activeTabId = 0;
   let activeTabUrl = "";
@@ -113,12 +113,10 @@
       });
     }
 
-    maxPinnedGroup?.addEventListener("click", (event) => {
-      const button = event.target.closest("button[data-max-pinned]");
-      if (!button) return;
+    maxPinnedSelect?.addEventListener("change", () => {
       saveSettings({
         ...settings,
-        maxPinnedPopovers: clampPinnedLimit(button.dataset.maxPinned)
+        maxPinnedPopovers: clampPinnedLimit(maxPinnedSelect.value)
       });
     });
 
@@ -317,8 +315,8 @@
       }
     }
 
-    for (const button of maxPinnedGroup?.querySelectorAll("button[data-max-pinned]") || []) {
-      button.classList.toggle("is-active", Number(button.dataset.maxPinned) === settings.maxPinnedPopovers);
+    if (maxPinnedSelect) {
+      maxPinnedSelect.value = String(settings.maxPinnedPopovers);
     }
 
     for (const [listKey, config] of Object.entries(LIST_CONFIGS)) {

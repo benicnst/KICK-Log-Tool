@@ -50,6 +50,41 @@
       return true;
     }
 
+    if (message.type === "KLT_EXECUTE_PAGE_FETCH") {
+      const tabId = sender.tab?.id || Number(message.tabId);
+      if (!Number.isFinite(tabId)) {
+        sendResponse?.({ ok: false, error: "No tabId" });
+        return true;
+      }
+
+      try {
+        chrome.scripting.executeScript({
+          target: { tabId: Number(tabId) },
+          world: "MAIN",
+          func: (path, origin) => {
+            return fetch(origin + path, { credentials: "include", headers: { Accept: "application/json" } })
+              .then(async (r) => {
+                const text = await r.text();
+                try {
+                  return { ok: r.ok, status: r.status, json: JSON.parse(text) };
+                } catch (e) {
+                  return { ok: r.ok, status: r.status, text };
+                }
+              })
+              .catch((e) => ({ error: String(e) }));
+          },
+          args: [String(message.path || ""), String(message.origin || "https://kick.com")]
+        }, (results) => {
+          const res = results?.[0]?.result;
+          sendResponse?.({ ok: true, result: res });
+        });
+        return true;
+      } catch (error) {
+        sendResponse?.({ ok: false, error: String(error) });
+        return true;
+      }
+    }
+
     return false;
   });
 

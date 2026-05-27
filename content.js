@@ -2037,38 +2037,31 @@
     return { usernames: [], reason: "フォロー中チャンネルが見つかりませんでした。", loginRequired: false, source: "" };
   }
 
-  function fetchFollowedChannelsTotalProbe() {
-    return new Promise((resolve) => {
-      const eventId = `klt-fcp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      const timeout = window.setTimeout(() => {
-        window.removeEventListener(eventId, handler);
-        document.getElementById(eventId)?.remove();
-        resolve({ totalCount: 0, loginRequired: false });
-      }, 5000);
+  async function fetchFollowedChannelsTotalProbe() {
+    try {
+      const resp = await sendRuntimeMessage({ type: "KLT_EXECUTE_PAGE_FETCH", path: "/api/v2/channels/followed?per_page=1" });
+      const r = resp?.result || null;
+      if (r && r.json) {
+        const tc = Number(r.json.total) || Number(r.json.count) || Number(r.json.pagination?.total) || 0;
+        if (tc) return { totalCount: tc, loginRequired: false };
+      }
 
-      const handler = (event) => {
-        if (!event.detail || event.detail._id !== eventId) return;
-        window.clearTimeout(timeout);
-        window.removeEventListener(eventId, handler);
-        document.getElementById(eventId)?.remove();
-        resolve({
-          totalCount: Number(event.detail.totalCount) || 0,
-          loginRequired: event.detail.loginRequired === true
-        });
-      };
+      // fallback to v1
+      const resp2 = await sendRuntimeMessage({ type: "KLT_EXECUTE_PAGE_FETCH", path: "/api/v1/channels/followed?per_page=1" });
+      const r2 = resp2?.result || null;
+      if (r2 && r2.json) {
+        const tc2 = Number(r2.json.total) || Number(r2.json.count) || Number(r2.json.pagination?.total) || 0;
+        if (tc2) return { totalCount: tc2, loginRequired: false };
+      }
 
-      window.addEventListener(eventId, handler);
+      if (r2 && (r2.status === 401 || r2.status === 403)) {
+        return { totalCount: 0, loginRequired: true };
+      }
 
-      const script = document.createElement("script");
-      script.id = eventId;
-      const scriptContent = `(async()=>{const S=${JSON.stringify(eventId)};const U=${JSON.stringify(API_ORIGIN)};try{const r=await fetch(U+"/api/v2/channels/followed?per_page=1",{credentials:"include",headers:{"Accept":"application/json"}});if(r.ok){const d=await r.json();const tc=d.total||d.count||d.pagination?.total||0;window.dispatchEvent(new CustomEvent(S,{detail:{_id:S,totalCount:tc,loginRequired:false}}));return}if(r.status===401||r.status===403){window.dispatchEvent(new CustomEvent(S,{detail:{_id:S,totalCount:0,loginRequired:true}}));return}}catch(_){}try{const r=await fetch(U+"/api/v1/channels/followed?per_page=1",{credentials:"include",headers:{"Accept":"application/json"}});if(r.ok){const d=await r.json();const tc=d.total||d.count||d.pagination?.total||0;window.dispatchEvent(new CustomEvent(S,{detail:{_id:S,totalCount:tc,loginRequired:false}}));return}}catch(_){}window.dispatchEvent(new CustomEvent(S,{detail:{_id:S,totalCount:0,loginRequired:false}}));})();`;
-      const blob = new Blob([scriptContent], { type: "text/javascript" });
-      script.src = URL.createObjectURL(blob);
-      script.onload = () => {
-        URL.revokeObjectURL(script.src);
-      };
-      document.documentElement.appendChild(script);
-    });
+      return { totalCount: 0, loginRequired: false };
+    } catch (_e) {
+      return { totalCount: 0, loginRequired: false };
+    }
   }
 
   function racePromise(promise, ms) {
@@ -2078,47 +2071,26 @@
     ]);
   }
 
-  function fetchFollowedChannelsViaPageContext() {
-    return new Promise((resolve) => {
-      const eventId = `klt-fc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      const timeout = window.setTimeout(() => {
-        window.removeEventListener(eventId, handler);
-        document.getElementById(eventId)?.remove();
-        resolve(null);
-      }, 10000);
+  async function fetchFollowedChannelsViaPageContext() {
+    try {
+      const resp = await sendRuntimeMessage({ type: "KLT_EXECUTE_PAGE_FETCH", path: "/api/v2/channels/followed?per_page=100" });
+      const r = resp?.result || null;
+      if (r && r.json) {
+        const usernames = extractFollowedChannelUsernames(r.json);
+        return { usernames, reason: usernames.length ? "" : "", loginRequired: false, source: "kick-api-v2", raw: r.json };
+      }
 
-      const handler = (event) => {
-        if (!event.detail || event.detail._id !== eventId) return;
-        window.clearTimeout(timeout);
-        window.removeEventListener(eventId, handler);
-        document.getElementById(eventId)?.remove();
+      const resp2 = await sendRuntimeMessage({ type: "KLT_EXECUTE_PAGE_FETCH", path: "/api/v1/channels/followed?per_page=100" });
+      const r2 = resp2?.result || null;
+      if (r2 && r2.json) {
+        const usernames = extractFollowedChannelUsernames(r2.json);
+        return { usernames, reason: usernames.length ? "" : "", loginRequired: false, source: "kick-api-v1", raw: r2.json };
+      }
 
-        if (event.detail.raw) {
-          const usernames = extractFollowedChannelUsernames(event.detail.raw);
-          resolve({
-            usernames,
-            reason: usernames.length ? "" : "",
-            loginRequired: false,
-            source: event.detail.source || "kick-api"
-          });
-          return;
-        }
-
-        resolve(null);
-      };
-
-      window.addEventListener(eventId, handler);
-
-      const script = document.createElement("script");
-      script.id = eventId;
-      const scriptContent = `(async()=>{const S=${JSON.stringify(eventId)};const U=${JSON.stringify(API_ORIGIN)};try{const r=await fetch(U+"/api/v2/channels/followed?per_page=100",{credentials:"include",headers:{"Accept":"application/json"}});if(r.ok){const d=await r.json();window.dispatchEvent(new CustomEvent(S,{detail:{_id:S,raw:d,source:"kick-api-v2"}}));return}}catch(_){}try{const r=await fetch(U+"/api/v1/channels/followed?per_page=100",{credentials:"include",headers:{"Accept":"application/json"}});if(r.ok){const d=await r.json();window.dispatchEvent(new CustomEvent(S,{detail:{_id:S,raw:d,source:"kick-api-v1"}}));return}}catch(_){}window.dispatchEvent(new CustomEvent(S,{detail:{_id:S,raw:null}}));})();`;
-      const blob = new Blob([scriptContent], { type: "text/javascript" });
-      script.src = URL.createObjectURL(blob);
-      script.onload = () => {
-        URL.revokeObjectURL(script.src);
-      };
-      document.documentElement.appendChild(script);
-    });
+      return null;
+    } catch (_e) {
+      return null;
+    }
   }
 
   function extractFollowedChannelUsernames(data) {

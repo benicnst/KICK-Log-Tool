@@ -14,7 +14,7 @@
   const HOVER_GRACE_MS = 450;
   const HOVER_HIDE_DELAY_MS = 160;
   const HOVER_BRIDGE_MARGIN = 6;
-  const AUTO_TEMPORARY_POPUP_MS = 4500;
+
   const DEFAULT_MAX_PINNED_POPOVERS = 3;
   const MIN_PINNED_POPOVERS = 1;
   const MAX_PINNED_POPOVERS = 5;
@@ -42,10 +42,11 @@
   const BACKFILL_WINDOW_OFFSETS_MINUTES = [
     1, 2, 4, 8, 15, 30, 45, 60, 90, 120, 180, 240
   ];
-  const ALERT_ACTIONS = new Set(["notify", "temporary", "auto-pin", "off"]);
+  const ALERT_ACTIONS = new Set(["notify", "auto-pin", "off"]);
   const DEFAULT_SETTINGS = {
     alertAction: "auto-pin",
     maxPinnedPopovers: DEFAULT_MAX_PINNED_POPOVERS,
+    temporaryPopupDuration: 0,
     watchlistEnabled: true,
     ignorelistEnabled: true,
     broadcasterListEnabled: true,
@@ -99,6 +100,7 @@
   let pendingHover = null;
   let hideTimer = 0;
   let isPointerOverPopover = false;
+  let isTemporaryPopoverActive = false;
   let lastPointer = { x: 0, y: 0 };
   let lastPointerHoverAt = 0;
   let scanInterval = 0;
@@ -343,6 +345,7 @@
     return {
       alertAction,
       maxPinnedPopovers,
+      temporaryPopupDuration: clampTemporaryPopupDuration(settings.temporaryPopupDuration),
       watchlistEnabled: settings.watchlistEnabled !== false,
       ignorelistEnabled: settings.ignorelistEnabled !== false,
       broadcasterListEnabled: settings.broadcasterListEnabled !== false,
@@ -383,6 +386,17 @@
     const numeric = Number(value);
     if (!Number.isFinite(numeric)) return DEFAULT_MAX_PINNED_POPOVERS;
     return Math.min(MAX_PINNED_POPOVERS, Math.max(MIN_PINNED_POPOVERS, Math.round(numeric)));
+  }
+
+  function clampTemporaryPopupDuration(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return 0;
+    if (numeric === 0) return 0;
+    return Math.min(10, Math.max(3, Math.round(numeric)));
+  }
+
+  function getTemporaryPopupDuration() {
+    return clampTemporaryPopupDuration(userSettings.temporaryPopupDuration);
   }
 
   function isIgnoredUser(key) {
@@ -1395,6 +1409,7 @@
 
   function hidePopover() {
     clearTimeout(hideTimer);
+    isTemporaryPopoverActive = false;
     activeRow = null;
     activeUsername = "";
     activeAnchor = null;
@@ -1405,6 +1420,7 @@
   }
 
   function scheduleHidePopover(delay = HOVER_HIDE_DELAY_MS) {
+    if (isTemporaryPopoverActive) return;
     clearTimeout(hideTimer);
     hideTimer = window.setTimeout(() => {
       if (isPointerInsideActiveHoverZone()) return;
@@ -1655,34 +1671,37 @@
     if (action === "notify" || action === "off") return;
     if (pinnedCards.has(key) || autoPinnedUsers.has(key) || autoPinDismissedUsers.has(key)) return;
 
-    if (action === "temporary") {
-      showTemporaryAlertPopover(key, username);
-      return;
-    }
-
     if (action === "auto-pin") {
-      if (pinnedCards.size >= getMaxPinnedPopovers()) return;
-      if (pinUser(username, { auto: true })) {
-        autoPinnedUsers.add(key);
+      const duration = getTemporaryPopupDuration();
+      if (duration === 0) {
+        if (pinnedCards.size >= getMaxPinnedPopovers()) return;
+        if (pinUser(username, { auto: true })) {
+          autoPinnedUsers.add(key);
+        }
+      } else {
+        showTemporaryAlertPopover(key, username, duration);
       }
     }
   }
 
-  function showTemporaryAlertPopover(key, username) {
+  function showTemporaryAlertPopover(key, username, durationSec) {
     const anchorInfo = lastUserAnchors.get(key);
     const anchor = anchorInfo?.anchor;
     const row = anchorInfo?.row;
     if (!anchor || !row || !document.documentElement.contains(anchor) || !document.documentElement.contains(row)) return;
 
     clearTimeout(hideTimer);
+    isTemporaryPopoverActive = true;
     activeRow = row;
     activeUsername = username;
     activeAnchor = anchor;
     renderPopover(username, anchor);
+    const ms = Math.max(1000, (durationSec || getTemporaryPopupDuration()) * 1000);
     hideTimer = window.setTimeout(() => {
+      isTemporaryPopoverActive = false;
       if (isPointerOverPopover || activeRow?.matches?.(":hover")) return;
       hidePopover();
-    }, AUTO_TEMPORARY_POPUP_MS);
+    }, ms);
   }
 
   function getKickProfileUrl(username) {
@@ -1922,6 +1941,17 @@
     return candidates[0] || rootRect.bottom || window.innerHeight;
   }
 
+  function isMaybeLoggedIn() {
+    const loginLink = document.querySelector('a[href*="/login"]');
+    if (loginLink && isVisibleElement(loginLink)) return false;
+    if (getStoredKickAuthToken()) return true;
+    const cookieNames = ["access_token", "accessToken", "__session", "kick_session"];
+    for (const name of cookieNames) {
+      if (getCookieValue(name)) return true;
+    }
+    return true;
+  }
+
   function scheduleFollowedChannelsSync(delay = 0) {
     clearTimeout(followedChannelsSyncTimer);
     if (!userSettings.broadcasterListEnabled) {
@@ -1944,14 +1974,21 @@
     await updateFollowedChannelsSyncStatus("running", "フォロー中チャンネルを読み込み中...");
     try {
       const apiResult = await fetchFollowedChannelUsernames();
+
+      if (apiResult.reason) {
+        const reason = apiResult.reason;
+        await updateFollowedChannelsSyncStatus("failed", reason);
+        return;
+      }
+
       const visibleUsernames = apiResult.usernames.length ? [] : getVisibleFollowingUsernames();
       const usernames = normalizeUsernameList(
         apiResult.usernames.length ? apiResult.usernames : visibleUsernames,
         MAX_BROADCASTER_LIST_USERS
       );
+
       if (!usernames.length) {
-        const reason = apiResult.reason || "フォロー中チャンネルが見つかりませんでした。";
-        await updateFollowedChannelsSyncStatus("failed", reason);
+        await updateFollowedChannelsSyncStatus("failed", "フォロー中チャンネルが見つかりませんでした。");
         return;
       }
 
@@ -1961,6 +1998,7 @@
       await updateFollowedChannelsSyncStatus("success", "", {
         addedCount: result.addedCount,
         listCount: result.listCount,
+        totalCount: apiResult.totalCount || 0,
         source: apiResult.usernames.length ? apiResult.source || "Kick API" : "表示中のフォロー中欄"
       });
     } finally {
@@ -1974,83 +2012,113 @@
   }
 
   async function fetchFollowedChannelUsernames() {
-    const endpoints = [
-      `${API_ORIGIN}/api/v1/channels/followed?per_page=100`,
-      `${API_ORIGIN}/api/v1/channels/followed`,
-      `${API_ORIGIN}/api/v2/channels/followed?per_page=100`,
-      `${API_ORIGIN}/api/v2/channels/followed`,
-      `${API_ORIGIN}/api/v2/followed-channels?per_page=100`,
-      `${API_ORIGIN}/api/v2/followed-channels`,
-      `${API_ORIGIN}/api/v1/followed-channels?per_page=100`,
-      `${API_ORIGIN}/api/v1/followed-channels`,
-      `${API_ORIGIN}/api/v2/user/following?per_page=100`,
-      `${API_ORIGIN}/api/v2/users/self/following?per_page=100`,
-      `${API_ORIGIN}/api/v1/user/following?per_page=100`,
-      `${API_ORIGIN}/api/v1/users/self/following?per_page=100`
-    ];
-    const reasons = [];
-    let sawLoginRequired = false;
-
-    for (const endpoint of endpoints) {
-      const result = await fetchFollowedChannelEndpoint(endpoint);
-      if (result.usernames.length) return result;
-      if (result.loginRequired) sawLoginRequired = true;
-      if (result.reason) reasons.push(result.reason);
+    if (!isMaybeLoggedIn()) {
+      return { usernames: [], reason: "現在KICKにログインされていません。", loginRequired: true, source: "" };
     }
 
-    return {
-      usernames: [],
-      reason: sawLoginRequired
-        ? "フォロー中APIがログイン認証を要求しました。"
-        : reasons.find(Boolean) || "フォロー中チャンネルが見つかりませんでした。",
-      loginRequired: sawLoginRequired,
-      source: ""
-    };
+    const probe = await racePromise(fetchFollowedChannelsTotalProbe(), 5000);
+    const totalCount = probe && typeof probe.totalCount === "number" ? probe.totalCount : 0;
+
+    if (totalCount < 1) {
+      const loginRequired = probe?.loginRequired === true;
+      return {
+        usernames: [],
+        reason: loginRequired ? "現在KICKにログインされていません。" : "フォロー中チャンネルの合計数が取得できませんでした。",
+        loginRequired,
+        source: ""
+      };
+    }
+
+    const pageResult = await racePromise(fetchFollowedChannelsViaPageContext(), 10000);
+    if (pageResult && pageResult.usernames.length) {
+      return { ...pageResult, totalCount };
+    }
+
+    return { usernames: [], reason: "フォロー中チャンネルが見つかりませんでした。", loginRequired: false, source: "" };
   }
 
-  async function fetchFollowedChannelEndpoint(startUrl) {
-    let url = startUrl;
-    const usernames = [];
-    let lastReason = "";
+  function fetchFollowedChannelsTotalProbe() {
+    return new Promise((resolve) => {
+      const eventId = `klt-fcp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const timeout = window.setTimeout(() => {
+        window.removeEventListener(eventId, handler);
+        document.getElementById(eventId)?.remove();
+        resolve({ totalCount: 0, loginRequired: false });
+      }, 5000);
 
-    for (let page = 0; page < FOLLOWED_CHANNELS_MAX_PAGES && url; page += 1) {
-      try {
-        const response = await fetch(url, {
-          credentials: "include",
-          headers: getKickApiHeaders({ includeAuthToken: true })
+      const handler = (event) => {
+        if (!event.detail || event.detail._id !== eventId) return;
+        window.clearTimeout(timeout);
+        window.removeEventListener(eventId, handler);
+        document.getElementById(eventId)?.remove();
+        resolve({
+          totalCount: Number(event.detail.totalCount) || 0,
+          loginRequired: event.detail.loginRequired === true
         });
+      };
 
-        if (response.status === 401 || response.status === 403) {
-          return {
+      window.addEventListener(eventId, handler);
+
+      const script = document.createElement("script");
+      script.id = eventId;
+      const scriptContent = `(async()=>{const S=${JSON.stringify(eventId)};const U=${JSON.stringify(API_ORIGIN)};try{const r=await fetch(U+"/api/v2/channels/followed?per_page=1",{credentials:"include",headers:{"Accept":"application/json"}});if(r.ok){const d=await r.json();const tc=d.total||d.count||d.pagination?.total||0;window.dispatchEvent(new CustomEvent(S,{detail:{_id:S,totalCount:tc,loginRequired:false}}));return}if(r.status===401||r.status===403){window.dispatchEvent(new CustomEvent(S,{detail:{_id:S,totalCount:0,loginRequired:true}}));return}}catch(_){}try{const r=await fetch(U+"/api/v1/channels/followed?per_page=1",{credentials:"include",headers:{"Accept":"application/json"}});if(r.ok){const d=await r.json();const tc=d.total||d.count||d.pagination?.total||0;window.dispatchEvent(new CustomEvent(S,{detail:{_id:S,totalCount:tc,loginRequired:false}}));return}}catch(_){}window.dispatchEvent(new CustomEvent(S,{detail:{_id:S,totalCount:0,loginRequired:false}}));})();`;
+      const blob = new Blob([scriptContent], { type: "text/javascript" });
+      script.src = URL.createObjectURL(blob);
+      script.onload = () => {
+        URL.revokeObjectURL(script.src);
+      };
+      document.documentElement.appendChild(script);
+    });
+  }
+
+  function racePromise(promise, ms) {
+    return Promise.race([
+      promise,
+      new Promise((resolve) => setTimeout(() => resolve(null), ms))
+    ]);
+  }
+
+  function fetchFollowedChannelsViaPageContext() {
+    return new Promise((resolve) => {
+      const eventId = `klt-fc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const timeout = window.setTimeout(() => {
+        window.removeEventListener(eventId, handler);
+        document.getElementById(eventId)?.remove();
+        resolve(null);
+      }, 10000);
+
+      const handler = (event) => {
+        if (!event.detail || event.detail._id !== eventId) return;
+        window.clearTimeout(timeout);
+        window.removeEventListener(eventId, handler);
+        document.getElementById(eventId)?.remove();
+
+        if (event.detail.raw) {
+          const usernames = extractFollowedChannelUsernames(event.detail.raw);
+          resolve({
             usernames,
-            reason: "現在KICKにログインされていません。",
-            loginRequired: true
-          };
+            reason: usernames.length ? "" : "",
+            loginRequired: false,
+            source: event.detail.source || "kick-api"
+          });
+          return;
         }
 
-        if (!response.ok) {
-          lastReason = `フォロー中APIを取得できませんでした。(${response.status})`;
-          break;
-        }
+        resolve(null);
+      };
 
-        const data = await response.json();
-        usernames.push(...extractFollowedChannelUsernames(data));
-        if (!usernames.length) lastReason = getFollowedChannelsEmptyReason(data);
-        url = getNextFollowedChannelsUrl(data);
-      } catch (_error) {
-        return {
-          usernames,
-          reason: "フォロー中APIの通信に失敗しました。"
-        };
-      }
-    }
+      window.addEventListener(eventId, handler);
 
-    return {
-      usernames,
-      reason: usernames.length ? "" : lastReason || "フォロー中チャンネルが見つかりませんでした。",
-      loginRequired: false,
-      source: startUrl
-    };
+      const script = document.createElement("script");
+      script.id = eventId;
+      const scriptContent = `(async()=>{const S=${JSON.stringify(eventId)};const U=${JSON.stringify(API_ORIGIN)};try{const r=await fetch(U+"/api/v2/channels/followed?per_page=100",{credentials:"include",headers:{"Accept":"application/json"}});if(r.ok){const d=await r.json();window.dispatchEvent(new CustomEvent(S,{detail:{_id:S,raw:d,source:"kick-api-v2"}}));return}}catch(_){}try{const r=await fetch(U+"/api/v1/channels/followed?per_page=100",{credentials:"include",headers:{"Accept":"application/json"}});if(r.ok){const d=await r.json();window.dispatchEvent(new CustomEvent(S,{detail:{_id:S,raw:d,source:"kick-api-v1"}}));return}}catch(_){}window.dispatchEvent(new CustomEvent(S,{detail:{_id:S,raw:null}}));})();`;
+      const blob = new Blob([scriptContent], { type: "text/javascript" });
+      script.src = URL.createObjectURL(blob);
+      script.onload = () => {
+        URL.revokeObjectURL(script.src);
+      };
+      document.documentElement.appendChild(script);
+    });
   }
 
   function extractFollowedChannelUsernames(data) {
@@ -2166,49 +2234,6 @@
     }
 
     return [];
-  }
-
-  function getFollowedChannelsEmptyReason(data) {
-    if (!data || typeof data !== "object") return "";
-
-    const message = cleanText(
-      data.message ||
-      data.error ||
-      data.errors?.[0]?.message ||
-      data.data?.message ||
-      ""
-    );
-    return message ? `フォロー中API: ${message}` : "";
-  }
-
-  function getNextFollowedChannelsUrl(data) {
-    if (!data || typeof data !== "object") return "";
-
-    const next = cleanText(
-      data.next_page_url ||
-      data.nextPageUrl ||
-      data.next_page ||
-      data.nextPage ||
-      data.links?.next ||
-      data.data?.next_page_url ||
-      data.data?.nextPageUrl ||
-      data.data?.links?.next ||
-      data.pagination?.next ||
-      data.pagination?.next_page_url ||
-      data.meta?.next_page_url ||
-      data.meta?.nextPageUrl ||
-      data.meta?.pagination?.next ||
-      data.meta?.pagination?.next_page_url ||
-      ""
-    );
-    if (!next || next === "null") return "";
-
-    try {
-      const url = new URL(next, API_ORIGIN);
-      return url.hostname.endsWith("kick.com") ? url.href : "";
-    } catch (_error) {
-      return "";
-    }
   }
 
   async function mergeBroadcasterList(usernames) {
@@ -2387,6 +2412,7 @@
 
   function closeHoverPopover() {
     clearTimeout(hideTimer);
+    isTemporaryPopoverActive = false;
     activeRow = null;
     activeUsername = "";
     activeAnchor = null;
@@ -2796,6 +2822,7 @@
   }
 
   function processHoverTarget(target, clientX, relatedTarget = null) {
+    if (isTemporaryPopoverActive) return;
     if (target instanceof Node && popover.contains(target)) return;
 
     const row = findLikelyRowFromTarget(target, clientX);

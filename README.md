@@ -15,7 +15,7 @@ This project is not affiliated with, endorsed by, or sponsored by Kick.
 - チャット欄のユーザー名にマウスオーバーすると、そのユーザーの直近コメントを最大20件表示します。
 - 配信情報を取得できる場合、履歴は同一配信内に限定します。
 - チャット履歴はページを開いている間だけ保持し、ページを閉じる時に保存済み履歴を削除します。
-- 最大3人までポップアップを固定できます。
+- ポップアップ固定数を1〜5人の範囲で設定できます。
 - 固定したポップアップは画面上の好きな場所へドラッグできます。
 - レイドなどで別チャンネルへ移動した場合、固定ポップアップと一時履歴を自動で閉じます。
 - 表示中または固定中のユーザーに新しいコメントが追加された場合、ポップアップ内容を更新します。
@@ -24,10 +24,10 @@ This project is not affiliated with, endorsed by, or sponsored by Kick.
 - チャット一時停止中のみ、固定中ユーザーの取りこぼしを減らすために限定的な非公式API確認を行います。
 - チャット一時停止を解除すると、API確認ではなくチャット表示欄のリアルタイム取得に戻ります。
 - API確認中は固定ユーザー名の横に回転するリロードマークを表示します。
-- 複数の不審な投稿パターンに該当した場合、ユーザー名横にドクロマークを表示します。
-- ドクロマーク判定時の動作を、通知だけ・一時表示・自動固定・オフから選べます。
+- 複数の不審な投稿パターンに該当した場合、ユーザー名横に検出種別アイコンを表示します。
+- 検出時の動作を、通知だけ・一時表示・自動固定・オフから選べます。
 - ウォッチリスト、無視リスト、配信者リストを設定できます。
-- ログイン中はフォロー中チャンネルを配信者リストへ自動で読み込みます。
+- ログイン中はフォロー中チャンネルを配信者リストへ自動で読み込み、失敗時は理由を表示します。
 - 検出数を拡張機能アイコンのバッジに表示します。
 - 拡張機能アイコンをクリックすると、検出されたアカウント一覧と設定を確認できます。
 - 任意でモデレーション用コマンドボタンを表示できます。初期状態では非表示です。
@@ -62,24 +62,25 @@ EdgeとBraveもChromium系ブラウザのため、未パッケージ拡張機能
 - 拡張機能アイコンの数字は、現在のKickタブでドクロ判定されたアカウント数です。
 - 拡張機能アイコンをクリックすると検出一覧と設定を表示します。
 - 検出一覧のアカウント名をクリックすると、そのKickアカウントページを新規タブで開きます。
+- 検出一覧の内容部分をクリックすると、そのアカウントの履歴ポップアップを固定します。
 - 検出一覧の`クリア`を押すと、現在のKickタブの検出一覧とバッジを消します。
-- ドクロ判定時の動作は`通知だけ`、`一時表示`、`自動固定`、`オフ`から選べます。
+- 検出時の動作は`通知だけ`、`一時表示`、`自動固定`、`オフ`から選べます。
 - ウォッチリストに登録したIDがコメントすると検出一覧へ表示します。
 - 無視リストに登録したIDはドクロ判定、自動表示、自動固定の対象外になります。
 - 配信者リストに登録された配信者IDがコメントすると検出します。
 - 配信者リストがONの場合、ログイン中のKickページでフォロー中チャンネルを自動同期します。
-- フォロー中APIで取得できない場合は、ページ上に表示されているフォロー中欄を補助的に読み取ります。
+- フォロー中APIで取得できない場合は、ページ上に表示されているフォロー中欄を補助的に読み取ります。自動読み込みに失敗した場合は詳細設定内に理由を表示します。
 - チャットがスクロールで一時停止している間だけ、固定ユーザーの新着確認に限定API確認を使います。
 - チャット一時停止を解除すると、表示チャット欄のDOM監視によるリアルタイム取得に戻ります。
 - リアルタイム取得で投稿時刻が取れない場合は、直近のKick APIと照合して投稿時刻への補正を試みます。
 
-### ドクロマーク判定について
+### 検出アイコンについて
 
-ドクロマークはBOTや連投ツールの使用を断定するものではありません。あくまで、投稿パターンが不自然な可能性を示す簡易的な目印です。
+検出アイコンはBOT、連投ツール、個人情報投稿、危害予告などを断定するものではありません。あくまで、投稿パターンが不自然な可能性を示す簡易的な目印です。
 
-投稿時刻がAPI、ページ上の時刻情報、またはリアルタイム追加判定から取得できたコメントだけを判定に使います。投稿時刻が取れないコメントは「取得」時刻として区別して表示し、ドクロマーク判定には使いません。
+投稿時刻がAPI、ページ上の時刻情報、またはリアルタイム追加判定から取得できたコメントだけを判定に使います。投稿時刻が取れないコメントは「取得」時刻として区別して表示し、検出判定には使いません。
 
-以下の条件のうち、2つ以上に該当した場合のみドクロマークを表示します。
+以下の条件のうち、2つ以上に該当した場合のみ検出アイコンを表示します。
 
 - 60秒以内に5件以上コメントしている。
 - 120秒以内に8件以上コメントしている。
@@ -91,8 +92,10 @@ EdgeとBraveもChromium系ブラウザのため、未パッケージ拡張機能
 - URL風コメントが3件以上ある。
 - 1コメント内で同じ語句を大量に繰り返している。
 - 絵文字やスタンプ系の文字列を大量に投稿している。
+- 住所、電話番号、メールアドレスなど個人情報らしき投稿を連投している。
+- 殺害や危害予告らしき投稿を連投している。
 
-ドクロマーク判定に該当したユーザーの動作は設定で変更できます。`自動固定`の場合、最大3人までポップアップ固定されます。閉じたユーザーは、その配信中は自動固定されません。手動でピン留めした場合は再び固定できます。
+検出判定に該当したユーザーの動作は設定で変更できます。`自動固定`の場合、設定した上限数までポップアップ固定されます。閉じたユーザーは、その配信中は自動固定されません。手動でピン留めした場合は再び固定できます。
 
 誤判定になり得る例:
 
@@ -101,7 +104,7 @@ EdgeとBraveもChromium系ブラウザのため、未パッケージ拡張機能
 - 配信者が同じフレーズの投稿を促した。
 - 「w」「草」「おめ」などの短いリアクションを繰り返した。
 
-ドクロマークは証拠ではなく、確認が必要なアカウントの目安として扱ってください。
+検出アイコンは証拠ではなく、確認が必要なアカウントの目安として扱ってください。
 
 ### 任意のモデレーションボタン
 
@@ -187,7 +190,7 @@ GitHub Releaseには、`dist/KICK-Log-Tool.zip`をアップロードしてくだ
 - Shows up to the latest 20 captured comments for a hovered chat username.
 - Keeps history scoped to the current livestream when stream context is available.
 - Keeps chat history only while the page is open and clears saved history when the page is closed.
-- Supports pinning up to 3 user popups.
+- Lets you set the pinned-popup limit from 1 to 5 users.
 - Pinned popups can be dragged anywhere on the screen.
 - Automatically closes pinned popups and clears temporary history when moving to another channel, such as after a raid.
 - Updates visible and pinned popups when new comments are captured.
@@ -196,10 +199,10 @@ GitHub Releaseには、`dist/KICK-Log-Tool.zip`をアップロードしてくだ
 - Uses a limited unofficial Kick chat API only while chat is paused, and only for pinned users.
 - Returns to DOM-based realtime capture after chat pause is released.
 - Shows a rotating reload icon next to pinned users while API checking is active.
-- Shows a skull marker when multiple suspicious posting patterns are detected.
-- Lets you choose the skull-marker action: notify only, temporary popup, auto-pin, or off.
+- Shows a detection-type icon when multiple suspicious posting patterns are detected.
+- Lets you choose the detection action: notify only, temporary popup, auto-pin, or off.
 - Supports a watchlist, ignore list, and broadcaster list.
-- Automatically syncs followed channels into the broadcaster list when logged in.
+- Automatically syncs followed channels into the broadcaster list when logged in, and shows the failure reason when sync fails.
 - Shows the number of detected accounts on the extension icon badge.
 - Shows all detected accounts and settings in the extension popup.
 - Provides optional moderation command buttons, disabled by default.
@@ -233,23 +236,24 @@ Edge and Brave support unpacked Chromium extensions.
 - Close a pinned popup with the close button.
 - The extension icon badge shows the number of detected accounts in the current Kick tab.
 - Click the extension icon to open the detected-account list and settings.
-- Click an account in the list to open that Kick account page in a new tab.
+- Click the account ID in the list to open that Kick account page in a new tab.
+- Click the content area in the list to pin that user's history popup.
 - Click `Clear` in the popup to clear the detected list and badge for the current Kick tab.
-- Choose the skull-marker action from `Notify only`, `Temporary popup`, `Auto-pin`, or `Off`.
+- Choose the detection action from `Notify only`, `Temporary popup`, `Auto-pin`, or `Off`.
 - Add IDs to the watchlist to detect comments from those accounts.
 - Add IDs to the ignore list to exclude them from skull detection and automatic alerts.
 - Add broadcaster IDs to the broadcaster list to detect comments from those accounts.
 - When the broadcaster list is enabled, followed channels are synced automatically on logged-in Kick pages.
-- If the followed-channel API cannot be read, the extension falls back to the visible following section on the page.
+- If the followed-channel API cannot be read, the extension falls back to the visible following section on the page. Failed sync attempts show a reason in settings.
 - When chat is paused by scrolling, pinned users are checked through the limited API refresh.
 - When chat pause is released, realtime capture returns to the visible chat DOM.
 - When realtime capture does not include a posting time, the extension tries to correct it by matching recent Kick API messages.
 
-### Suspicious Account Marker
+### Detection Icons
 
-The skull marker is not a definitive bot judgment. It is only a heuristic warning that an account may be using automation or rapid-posting behavior.
+Detection icons are not definitive proof of bots, automation, personal-information posting, or threats. They are heuristic warnings for unusual posting patterns.
 
-Only comments with a posting time obtained from the Kick API, page timestamp data, or realtime-add detection are used for this check. Comments without an available posting time are labeled as captured time and are excluded from skull-marker detection.
+Only comments with a posting time obtained from the Kick API, page timestamp data, or realtime-add detection are used for this check. Comments without an available posting time are labeled as captured time and are excluded from detection.
 
 The marker is shown only when 2 or more of these conditions are true:
 
@@ -263,8 +267,10 @@ The marker is shown only when 2 or more of these conditions are true:
 - 3 or more URL-like comments are detected.
 - One comment contains heavy repeated phrases.
 - A comment contains a large amount of emoji or emote-like content.
+- Repeated comments appear to contain personal information such as an address, phone number, or email address.
+- Repeated comments appear to contain threats of killing or physical harm.
 
-The action after a skull-marker match is configurable. In `Auto-pin` mode, up to 3 users are pinned automatically. If you close an automatically pinned user, it will not be auto-pinned again during that stream. You can still pin that user manually.
+The action after a detection match is configurable. In `Auto-pin` mode, users are pinned up to the configured limit. If you close an automatically pinned user, it will not be auto-pinned again during that stream. You can still pin that user manually.
 
 Examples that can still be false positives:
 
@@ -273,7 +279,7 @@ Examples that can still be false positives:
 - A streamer asks chat to repeat a phrase.
 - A user posts repeated reactions such as short laughter or congratulations.
 
-Treat the skull marker as a review hint, not proof.
+Treat detection icons as review hints, not proof.
 
 ### Optional Moderation Buttons
 

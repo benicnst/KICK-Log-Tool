@@ -3,7 +3,6 @@
 
   const MAX_MESSAGES = 20;
   const MAX_USERS = 250;
-  const MAX_PINNED_POPOVERS = 3;
   const SAVE_DELAY_MS = 700;
   const API_WINDOW_MS = 60 * 1000;
   const MAX_API_WINDOWS_PER_USER = 240;
@@ -11,10 +10,16 @@
   const BASE_STORAGE_KEY = `kch:${location.hostname}:${location.pathname.split("/").filter(Boolean)[0] || "home"}`;
   const MODERATION_ACTIONS_STORAGE_KEY = "klt:moderationActionsEnabled";
   const SETTINGS_STORAGE_KEY = "klt:settings:v1";
+  const FOLLOWED_CHANNELS_SYNC_STORAGE_KEY = "klt:followedChannelsSync:v1";
   const HOVER_GRACE_MS = 450;
   const HOVER_HIDE_DELAY_MS = 160;
   const HOVER_BRIDGE_MARGIN = 6;
   const AUTO_TEMPORARY_POPUP_MS = 4500;
+  const DEFAULT_MAX_PINNED_POPOVERS = 3;
+  const MIN_PINNED_POPOVERS = 1;
+  const MAX_PINNED_POPOVERS = 5;
+  const FOLLOWED_CHANNELS_RETRY_MS = 30 * 1000;
+  const FOLLOWED_CHANNELS_MAX_RETRIES = 3;
   const FOLLOWED_CHANNELS_REFRESH_MS = 10 * 60 * 1000;
   const FOLLOWED_CHANNELS_MAX_PAGES = 5;
   const MAX_BROADCASTER_LIST_USERS = 500;
@@ -40,6 +45,7 @@
   const ALERT_ACTIONS = new Set(["notify", "temporary", "auto-pin", "off"]);
   const DEFAULT_SETTINGS = {
     alertAction: "auto-pin",
+    maxPinnedPopovers: DEFAULT_MAX_PINNED_POPOVERS,
     watchlistEnabled: true,
     ignorelistEnabled: true,
     broadcasterListEnabled: true,
@@ -110,6 +116,8 @@
   let followedChannelsSyncTimer = 0;
   let followedChannelsSyncRunning = false;
   let lastFollowedChannelsSyncAt = 0;
+  let followedChannelsSyncRetryCount = 0;
+  let followedChannelsSyncStatus = createFollowedChannelsSyncStatus("idle", "Kickページを開くと自動読み込みします。");
 
   const USERNAME_SELECTOR = [
     "[data-chat-entry-user]",
@@ -202,9 +210,11 @@
     const alertAction = ALERT_ACTIONS.has(settings.alertAction)
       ? settings.alertAction
       : DEFAULT_SETTINGS.alertAction;
+    const maxPinnedPopovers = clampPinnedLimit(settings.maxPinnedPopovers);
 
     return {
       alertAction,
+      maxPinnedPopovers,
       watchlistEnabled: settings.watchlistEnabled !== false,
       ignorelistEnabled: settings.ignorelistEnabled !== false,
       broadcasterListEnabled: settings.broadcasterListEnabled !== false,
@@ -235,6 +245,16 @@
     return ALERT_ACTIONS.has(userSettings.alertAction)
       ? userSettings.alertAction
       : DEFAULT_SETTINGS.alertAction;
+  }
+
+  function getMaxPinnedPopovers() {
+    return clampPinnedLimit(userSettings.maxPinnedPopovers);
+  }
+
+  function clampPinnedLimit(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return DEFAULT_MAX_PINNED_POPOVERS;
+    return Math.min(MAX_PINNED_POPOVERS, Math.max(MIN_PINNED_POPOVERS, Math.round(numeric)));
   }
 
   function isIgnoredUser(key) {
@@ -1027,7 +1047,7 @@
   const popover = createPopover();
 
   window.__KICK_CHAT_HISTORY_HOVER__ = {
-    version: "2.57.1",
+    version: "2.58.0",
     getChatRootCount: () => getChatRoots().length,
     getKnownUsers: () => [...userHistory.values()].map((value) => ({
       username: value.displayName,
@@ -1048,7 +1068,8 @@
         enabled: userSettings.broadcasterListEnabled,
         running: followedChannelsSyncRunning,
         lastSyncedAt: lastFollowedChannelsSyncAt,
-        broadcasterListSize: userSettings.broadcasterList.length
+        broadcasterListSize: userSettings.broadcasterList.length,
+        status: followedChannelsSyncStatus
       },
       chatPaused: isChatPaused(),
       apiDebug
@@ -1111,8 +1132,8 @@
     if (risk.suspicious) {
       const marker = document.createElement("span");
       marker.className = "kch-popover__risk";
-      marker.textContent = "💀";
-      marker.title = `BOT/連投ツールの可能性: ${risk.reasons.join(" / ")}`;
+      marker.textContent = getDetectionIcon(risk.reasons);
+      marker.title = `検出理由: ${risk.reasons.join(" / ")}`;
       nameElement.appendChild(marker);
     }
     if (pinnedApiCheckingUsers.has(key)) {
@@ -1363,8 +1384,9 @@
       return true;
     }
 
-    if (pinnedCards.size >= MAX_PINNED_POPOVERS) {
-      if (!auto) showPopoverNotice(`固定できるのは最大${MAX_PINNED_POPOVERS}人までです。`);
+    const maxPinned = getMaxPinnedPopovers();
+    if (pinnedCards.size >= maxPinned) {
+      if (!auto) showPopoverNotice(`固定できるのは最大${maxPinned}人までです。`);
       return false;
     }
 
@@ -1438,7 +1460,8 @@
 
   function handleSuspiciousUserCandidate(key, username, messageSource, timestampKind) {
     if (routeResetInProgress) return;
-    if (getAlertAction() === "off") return;
+    const action = getAlertAction();
+    if (action === "off") return;
     if (isIgnoredUser(key)) return;
     if (!isRealtimeSource(messageSource)) return;
     if (normalizeTimestampKind(timestampKind) !== "posted") return;
@@ -1448,7 +1471,7 @@
     if (!risk.suspicious) return;
 
     rememberDetectedUser(key, username, risk.reasons, history?.messages || []);
-    runAlertAction(key, username);
+    runAlertAction(key, username, action);
   }
 
   function isRealtimeSource(source) {
@@ -1468,7 +1491,7 @@
 
     const history = userHistory.get(key);
     rememberDetectedUser(key, username, reasons, history?.messages || []);
-    runAlertAction(key, username);
+    runAlertAction(key, username, getAlertAction());
   }
 
   function rememberDetectedUser(key, username, reasons, messages) {
@@ -1500,8 +1523,7 @@
     scheduleSuspiciousUsersReport(350);
   }
 
-  function runAlertAction(key, username) {
-    const action = getAlertAction();
+  function runAlertAction(key, username, action = getAlertAction()) {
     if (action === "notify" || action === "off") return;
     if (pinnedCards.has(key) || autoPinnedUsers.has(key) || autoPinDismissedUsers.has(key)) return;
 
@@ -1511,7 +1533,7 @@
     }
 
     if (action === "auto-pin") {
-      if (pinnedCards.size >= MAX_PINNED_POPOVERS) return;
+      if (pinnedCards.size >= getMaxPinnedPopovers()) return;
       if (pinUser(username, { auto: true })) {
         autoPinnedUsers.add(key);
       }
@@ -1537,6 +1559,16 @@
 
   function getKickProfileUrl(username) {
     return `${API_ORIGIN}/${encodeURIComponent(String(username || "").replace(/^@/, ""))}`;
+  }
+
+  function getDetectionIcon(reasons) {
+    const values = Array.isArray(reasons) ? reasons : [];
+    if (values.some((reason) => /殺害|危害|暴力|脅迫/.test(reason))) return "🔪";
+    if (values.some((reason) => /個人情報|住所|電話番号|メール/.test(reason))) return "👤";
+    if (values.some((reason) => /ウォッチリスト/.test(reason))) return "★";
+    if (values.some((reason) => /配信者リスト/.test(reason))) return "K";
+    if (values.length) return "🤖";
+    return "💀";
   }
 
   function getSuspiciousUserList() {
@@ -1628,6 +1660,25 @@
           return true;
         }
 
+        if (message.type === "KLT_PIN_USER") {
+          const username = cleanText(message.username || "").replace(/^@/, "");
+          if (!looksLikeUsernameToken(username, { allowNumericOnly: true })) {
+            sendResponse({
+              ok: false,
+              reason: "アカウントIDを確認できませんでした。"
+            });
+            return true;
+          }
+
+          const ok = pinUser(username, { fromPopup: true });
+          if (ok) backfillUserHistory(username);
+          sendResponse({
+            ok,
+            reason: ok ? "" : `固定できるのは最大${getMaxPinnedPopovers()}人までです。`
+          });
+          return true;
+        }
+
         return false;
       });
     } catch (_error) {
@@ -1711,7 +1762,10 @@
 
   function scheduleFollowedChannelsSync(delay = 0) {
     clearTimeout(followedChannelsSyncTimer);
-    if (!userSettings.broadcasterListEnabled) return;
+    if (!userSettings.broadcasterListEnabled) {
+      updateFollowedChannelsSyncStatus("disabled", "配信者リストがOFFです。");
+      return;
+    }
 
     followedChannelsSyncTimer = window.setTimeout(() => {
       followedChannelsSyncTimer = 0;
@@ -1724,24 +1778,79 @@
     if (Date.now() - lastFollowedChannelsSyncAt < FOLLOWED_CHANNELS_REFRESH_MS) return;
 
     followedChannelsSyncRunning = true;
+    let succeeded = false;
+    await updateFollowedChannelsSyncStatus("running", "フォロー中チャンネルを読み込み中...");
     try {
-      const apiUsernames = await fetchFollowedChannelUsernames();
+      const apiResult = await fetchFollowedChannelUsernames();
+      const visibleUsernames = apiResult.usernames.length ? [] : getVisibleFollowingUsernames();
       const usernames = normalizeUsernameList(
-        apiUsernames.length ? apiUsernames : getVisibleFollowingUsernames(),
+        apiResult.usernames.length ? apiResult.usernames : visibleUsernames,
         MAX_BROADCASTER_LIST_USERS
       );
-      if (!usernames.length) return;
+      if (!usernames.length) {
+        const reason = apiResult.reason || "フォロー中チャンネルが見つかりませんでした。";
+        await updateFollowedChannelsSyncStatus("failed", reason);
+        return;
+      }
 
-      await mergeBroadcasterList(usernames);
+      const result = await mergeBroadcasterList(usernames);
+      succeeded = true;
+      followedChannelsSyncRetryCount = 0;
+      await updateFollowedChannelsSyncStatus("success", "", {
+        addedCount: result.addedCount,
+        listCount: result.listCount,
+        source: apiResult.usernames.length ? apiResult.source || "Kick API" : "表示中のフォロー中欄"
+      });
     } finally {
-      lastFollowedChannelsSyncAt = Date.now();
       followedChannelsSyncRunning = false;
+      lastFollowedChannelsSyncAt = succeeded ? Date.now() : 0;
+      if (!succeeded && userSettings.broadcasterListEnabled && followedChannelsSyncRetryCount < FOLLOWED_CHANNELS_MAX_RETRIES) {
+        followedChannelsSyncRetryCount += 1;
+        scheduleFollowedChannelsSync(FOLLOWED_CHANNELS_RETRY_MS);
+      }
     }
   }
 
   async function fetchFollowedChannelUsernames() {
-    let url = `${API_ORIGIN}/api/v1/channels/followed`;
+    const endpoints = [
+      `${API_ORIGIN}/api/v2/channels/followed?per_page=100`,
+      `${API_ORIGIN}/api/v2/channels/followed`,
+      `${API_ORIGIN}/api/v1/channels/followed?per_page=100`,
+      `${API_ORIGIN}/api/v1/channels/followed`,
+      `${API_ORIGIN}/api/v2/followed-channels?per_page=100`,
+      `${API_ORIGIN}/api/v2/followed-channels`,
+      `${API_ORIGIN}/api/v1/followed-channels?per_page=100`,
+      `${API_ORIGIN}/api/v1/followed-channels`,
+      `${API_ORIGIN}/api/v2/user/following?per_page=100`,
+      `${API_ORIGIN}/api/v2/users/self/following?per_page=100`,
+      `${API_ORIGIN}/api/v1/user/following?per_page=100`,
+      `${API_ORIGIN}/api/v1/users/self/following?per_page=100`,
+      `${API_ORIGIN}/api/v1/channels/followed`
+    ];
+    const reasons = [];
+    let sawLoginRequired = false;
+
+    for (const endpoint of endpoints) {
+      const result = await fetchFollowedChannelEndpoint(endpoint);
+      if (result.usernames.length) return result;
+      if (result.loginRequired) sawLoginRequired = true;
+      if (result.reason) reasons.push(result.reason);
+    }
+
+    return {
+      usernames: [],
+      reason: sawLoginRequired
+        ? "フォロー中APIがログイン認証を要求しました。"
+        : reasons.find(Boolean) || "フォロー中チャンネルが見つかりませんでした。",
+      loginRequired: sawLoginRequired,
+      source: ""
+    };
+  }
+
+  async function fetchFollowedChannelEndpoint(startUrl) {
+    let url = startUrl;
     const usernames = [];
+    let lastReason = "";
 
     for (let page = 0; page < FOLLOWED_CHANNELS_MAX_PAGES && url; page += 1) {
       try {
@@ -1752,17 +1861,37 @@
           }
         });
 
-        if (!response.ok) return usernames;
+        if (response.status === 401 || response.status === 403) {
+          return {
+            usernames,
+            reason: "現在KICKにログインされていません。",
+            loginRequired: true
+          };
+        }
+
+        if (!response.ok) {
+          lastReason = `フォロー中APIを取得できませんでした。(${response.status})`;
+          break;
+        }
 
         const data = await response.json();
         usernames.push(...extractFollowedChannelUsernames(data));
+        if (!usernames.length) lastReason = getFollowedChannelsEmptyReason(data);
         url = getNextFollowedChannelsUrl(data);
       } catch (_error) {
-        return usernames;
+        return {
+          usernames,
+          reason: "フォロー中APIの通信に失敗しました。"
+        };
       }
     }
 
-    return usernames;
+    return {
+      usernames,
+      reason: usernames.length ? "" : lastReason || "フォロー中チャンネルが見つかりませんでした。",
+      loginRequired: false,
+      source: startUrl
+    };
   }
 
   function extractFollowedChannelUsernames(data) {
@@ -1770,37 +1899,127 @@
     const usernames = [];
 
     for (const item of items) {
-      const channel = item?.channel || item?.streamer || item?.user || item;
-      const username = cleanText(
-        channel?.slug ||
-        channel?.username ||
-        channel?.user?.username ||
-        channel?.user?.slug ||
-        item?.slug ||
-        item?.username
-      ).replace(/^@/, "");
+      const username = getFollowedItemUsername(item);
       if (looksLikeUsernameToken(username, { allowNumericOnly: true })) usernames.push(username);
     }
 
     return usernames;
   }
 
+  function getFollowedItemUsername(item) {
+    const sources = [
+      item?.node,
+      item?.channel,
+      item?.streamer,
+      item?.user,
+      item?.broadcaster,
+      item?.creator,
+      item?.livestream?.channel,
+      item?.livestream?.user,
+      item?.stream?.channel,
+      item?.stream?.user,
+      item
+    ].filter(Boolean);
+
+    for (const source of sources) {
+      const username = cleanText(
+        source.slug ||
+        source.username ||
+        source.user_name ||
+        source.userName ||
+        source.channel_slug ||
+        source.channelSlug ||
+        source.channel_username ||
+        source.channelUsername ||
+        source.user?.username ||
+        source.user?.slug ||
+        source.channel?.username ||
+        source.channel?.slug ||
+        source.broadcaster_user?.username ||
+        source.broadcaster_user?.slug ||
+        source.broadcasterUser?.username ||
+        source.broadcasterUser?.slug ||
+        ""
+      ).replace(/^@/, "");
+      if (looksLikeUsernameToken(username, { allowNumericOnly: true })) return username;
+    }
+
+    return "";
+  }
+
   function getFollowedChannelItems(data) {
-    if (Array.isArray(data)) return data;
+    if (Array.isArray(data)) return normalizeFollowedItems(data);
     if (!data || typeof data !== "object") return [];
 
     const candidates = [
       data.channels,
+      data.channel,
       data.followed_channels,
       data.followedChannels,
+      data.following,
+      data.followings,
       data.data,
       data.data?.channels,
+      data.data?.channel,
       data.data?.followed_channels,
+      data.data?.followedChannels,
+      data.data?.following,
+      data.data?.followings,
+      data.data?.data,
+      data.data?.items,
+      data.data?.results,
+      data.data?.edges,
+      data.data?.nodes,
       data.results,
-      data.items
+      data.items,
+      data.edges,
+      data.nodes,
+      data.livestreams
     ];
 
-    return candidates.find((value) => Array.isArray(value)) || [];
+    const direct = candidates.find((value) => Array.isArray(value));
+    if (direct) return normalizeFollowedItems(direct);
+
+    return findFollowedItemsDeep(data);
+  }
+
+  function normalizeFollowedItems(items) {
+    return items
+      .map((item) => item?.node || item)
+      .filter(Boolean);
+  }
+
+  function findFollowedItemsDeep(value, depth = 0) {
+    if (!value || typeof value !== "object" || depth > 4) return [];
+
+    if (Array.isArray(value)) {
+      const items = normalizeFollowedItems(value);
+      return items.some((item) => getFollowedItemUsername(item)) ? items : [];
+    }
+
+    const preferredEntries = Object.entries(value)
+      .filter(([key]) => /follow|channel|streamer|user|data|item|edge|node/i.test(key));
+    const entries = preferredEntries.length ? preferredEntries : Object.entries(value);
+
+    for (const [, child] of entries) {
+      const result = findFollowedItemsDeep(child, depth + 1);
+      if (result.length) return result;
+    }
+
+    return [];
+  }
+
+  function getFollowedChannelsEmptyReason(data) {
+    if (!data || typeof data !== "object") return "";
+
+    const message = cleanText(
+      data.message ||
+      data.error ||
+      data.errors?.[0]?.message ||
+      data.data?.message ||
+      ""
+    );
+    return message ? `フォロー中API: ${message}` : "";
   }
 
   function getNextFollowedChannelsUrl(data) {
@@ -1812,7 +2031,15 @@
       data.next_page ||
       data.nextPage ||
       data.links?.next ||
+      data.data?.next_page_url ||
+      data.data?.nextPageUrl ||
+      data.data?.links?.next ||
+      data.pagination?.next ||
+      data.pagination?.next_page_url ||
       data.meta?.next_page_url ||
+      data.meta?.nextPageUrl ||
+      data.meta?.pagination?.next ||
+      data.meta?.pagination?.next_page_url ||
       ""
     );
     if (!next || next === "null") return "";
@@ -1826,11 +2053,17 @@
   }
 
   async function mergeBroadcasterList(usernames) {
+    const beforeCount = userSettings.broadcasterList.length;
     const merged = normalizeUsernameList([
       ...userSettings.broadcasterList,
       ...usernames
     ], MAX_BROADCASTER_LIST_USERS);
-    if (merged.length === userSettings.broadcasterList.length) return;
+    if (merged.length === userSettings.broadcasterList.length) {
+      return {
+        addedCount: 0,
+        listCount: merged.length
+      };
+    }
 
     userSettings = normalizeSettings({
       ...userSettings,
@@ -1838,6 +2071,29 @@
       broadcasterList: merged
     });
     await writeExtensionStorage(SETTINGS_STORAGE_KEY, userSettings);
+    return {
+      addedCount: Math.max(0, merged.length - beforeCount),
+      listCount: merged.length
+    };
+  }
+
+  function createFollowedChannelsSyncStatus(state, reason = "", extra = {}) {
+    return {
+      state,
+      reason,
+      updatedAt: Date.now(),
+      pageUrl: location.href,
+      channelSlug: getChannelSlug(),
+      listCount: userSettings.broadcasterList?.length || 0,
+      addedCount: 0,
+      source: "",
+      ...extra
+    };
+  }
+
+  async function updateFollowedChannelsSyncStatus(state, reason = "", extra = {}) {
+    followedChannelsSyncStatus = createFollowedChannelsSyncStatus(state, reason, extra);
+    await writeExtensionStorage(FOLLOWED_CHANNELS_SYNC_STORAGE_KEY, followedChannelsSyncStatus);
   }
 
   function showPopoverNotice(message) {
@@ -2213,6 +2469,16 @@
       reasons.push("絵文字/スタンプ大量");
     }
 
+    const personalInfoCount = sorted.filter((message) => looksLikePersonalInfoPost(message.rawText)).length;
+    if (personalInfoCount >= 2) {
+      reasons.push("個人情報らしき投稿の連投");
+    }
+
+    const violentThreatCount = sorted.filter((message) => looksLikeViolentThreatPost(message.rawText)).length;
+    if (violentThreatCount >= 2) {
+      reasons.push("殺害/危害予告らしき投稿の連投");
+    }
+
     return {
       suspicious: reasons.length >= 2,
       reasons
@@ -2243,6 +2509,22 @@
       .replace(/\d+/g, "0")
       .replace(/[!?！？。、,.…~ーｰｗw\s]+/g, "")
       .trim();
+  }
+
+  function looksLikePersonalInfoPost(text) {
+    const value = cleanText(text);
+    if (!value) return false;
+    if (/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(value)) return true;
+    if (/0\d{1,4}[-ー−\s]?\d{1,4}[-ー−\s]?\d{3,4}/.test(value)) return true;
+    if (/〒?\s*\d{3}[-ー−]?\d{4}/.test(value)) return true;
+    if (/(北海道|東京都|京都府|大阪府|.{2,3}県).{2,24}(市|区|町|村).{0,30}(\d|丁目|番地|号|マンション|アパート|荘|ハイツ)/.test(value)) return true;
+    return /(住所|本名|電話番号|メアド|メールアドレス|最寄り駅|実家).{0,24}[:：]/.test(value);
+  }
+
+  function looksLikeViolentThreatPost(text) {
+    const value = cleanText(text).toLowerCase();
+    if (!value) return false;
+    return /殺す|殺害|刺す|刺しに|ぶっ殺|ころす|56す|死ね|危害|襲う|放火|爆破|kill\s+you|murder|stab|shoot/.test(value);
   }
 
   function hasRepeatedLongComment(counts) {
@@ -2618,21 +2900,39 @@
   }
 
   function applySettingsToDetectedUsers() {
-    if (getAlertAction() === "off") {
-      suspiciousUsers.clear();
-      sendSuspiciousUsersReport();
-      return;
-    }
-
     let changed = false;
-    for (const key of suspiciousUsers.keys()) {
+    for (const [key, user] of suspiciousUsers.entries()) {
       if (isIgnoredUser(key)) {
         suspiciousUsers.delete(key);
+        changed = true;
+        continue;
+      }
+
+      const reasons = getEnabledDetectionReasons(user.reasons || []);
+      if (!reasons.length) {
+        suspiciousUsers.delete(key);
+        changed = true;
+      } else if (reasons.length !== user.reasons.length) {
+        user.reasons = reasons;
         changed = true;
       }
     }
 
     if (changed) sendSuspiciousUsersReport();
+  }
+
+  function getEnabledDetectionReasons(reasons) {
+    return reasons.filter((reason) => {
+      if (reason === "ウォッチリスト") {
+        return userSettings.watchlistEnabled && getAlertAction() !== "off";
+      }
+
+      if (reason === "配信者リスト") {
+        return userSettings.broadcasterListEnabled && getAlertAction() !== "off";
+      }
+
+      return getAlertAction() !== "off";
+    });
   }
 
   function saveHistory() {
@@ -2690,6 +2990,7 @@
     clearTimeout(timestampCorrectionTimer);
     followedChannelsSyncTimer = 0;
     followedChannelsSyncRunning = false;
+    followedChannelsSyncRetryCount = 0;
     lastFollowedChannelsSyncAt = 0;
     timestampCorrectionTimer = 0;
     clearSavedHistory();
@@ -3366,6 +3667,7 @@
     clearTimeout(followedChannelsSyncTimer);
     clearTimeout(timestampCorrectionTimer);
     followedChannelsSyncTimer = 0;
+    followedChannelsSyncRetryCount = 0;
     timestampCorrectionTimer = 0;
     clearSavedHistory();
     if (scanInterval) window.clearInterval(scanInterval);

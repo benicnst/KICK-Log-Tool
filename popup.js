@@ -5,12 +5,18 @@
   const CLEAR_CONTENT_REPORT_TYPE = "KLT_CLEAR_SUSPICIOUS_USERS";
   const GET_BACKGROUND_REPORT_TYPE = "KLT_GET_SUSPICIOUS_REPORT";
   const CLEAR_BACKGROUND_REPORT_TYPE = "KLT_CLEAR_SUSPICIOUS_REPORT";
+  const PIN_CONTENT_USER_TYPE = "KLT_PIN_USER";
   const SETTINGS_STORAGE_KEY = "klt:settings:v1";
+  const FOLLOWED_CHANNELS_SYNC_STORAGE_KEY = "klt:followedChannelsSync:v1";
   const MAX_LIST_USERS = 200;
   const MAX_BROADCASTER_LIST_USERS = 500;
+  const DEFAULT_MAX_PINNED_POPOVERS = 3;
+  const MIN_PINNED_POPOVERS = 1;
+  const MAX_PINNED_POPOVERS = 5;
   const ALERT_ACTIONS = new Set(["notify", "temporary", "auto-pin", "off"]);
   const DEFAULT_SETTINGS = {
     alertAction: "auto-pin",
+    maxPinnedPopovers: DEFAULT_MAX_PINNED_POPOVERS,
     watchlistEnabled: true,
     ignorelistEnabled: true,
     broadcasterListEnabled: true,
@@ -37,8 +43,6 @@
     broadcasterList: {
       enabledKey: "broadcasterListEnabled",
       toggle: "#broadcaster-list-enabled",
-      form: "#broadcaster-list-form",
-      input: "#broadcaster-list-input",
       items: "#broadcaster-list-items"
     }
   };
@@ -48,13 +52,18 @@
   const list = document.querySelector("#list");
   const clearButton = document.querySelector("#clear");
   const settingsToggle = document.querySelector("#settings-toggle");
+  const settingsToggleIcon = settingsToggle.querySelector(".klt-icon");
+  const settingsToggleLabel = settingsToggle.querySelector(".klt-button-label");
   const mainView = document.querySelector("#main-view");
   const settingsView = document.querySelector("#settings-view");
-  const actionGroup = document.querySelector("#alert-action");
+  const actionGroups = [...document.querySelectorAll("[data-alert-action]")];
+  const maxPinnedGroup = document.querySelector("#max-pinned-popovers");
+  const broadcasterSyncStatus = document.querySelector("#broadcaster-sync-status");
   let activeTabId = 0;
   let activeTabUrl = "";
   let settingsVisible = false;
   let settings = { ...DEFAULT_SETTINGS };
+  let followedChannelsSyncStatus = createDefaultFollowedChannelsSyncStatus();
 
   bindEvents();
   init();
@@ -64,35 +73,59 @@
     settingsToggle.addEventListener("click", toggleSettingsView);
 
     chrome.storage.onChanged.addListener((changes, areaName) => {
-      if (areaName !== "local" || !changes[SETTINGS_STORAGE_KEY]) return;
-      settings = normalizeSettings(changes[SETTINGS_STORAGE_KEY].newValue);
-      renderSettings();
+      if (areaName !== "local") return;
+
+      if (changes[SETTINGS_STORAGE_KEY]) {
+        settings = normalizeSettings(changes[SETTINGS_STORAGE_KEY].newValue);
+        renderSettings();
+      }
+
+      if (changes[FOLLOWED_CHANNELS_SYNC_STORAGE_KEY]) {
+        followedChannelsSyncStatus = normalizeFollowedChannelsSyncStatus(changes[FOLLOWED_CHANNELS_SYNC_STORAGE_KEY].newValue);
+        renderFollowedChannelsSyncStatus();
+      }
     });
 
     list.addEventListener("click", (event) => {
-      const button = event.target.closest(".klt-popup__item");
-      if (!button) return;
+      const profileButton = event.target.closest("[data-profile-url]");
+      if (profileButton) {
+        const url = profileButton.dataset.profileUrl;
+        if (!url) return;
+        chrome.tabs.create({ url });
+        return;
+      }
 
-      const url = button.dataset.profileUrl;
-      if (!url) return;
-      chrome.tabs.create({ url });
+      const pinTarget = event.target.closest("[data-pin-username]");
+      if (!pinTarget) return;
+      pinDetectedUser(pinTarget.dataset.pinUsername);
     });
 
-    actionGroup.addEventListener("click", (event) => {
-      const button = event.target.closest("button[data-action]");
+    for (const group of actionGroups) {
+      group.addEventListener("click", (event) => {
+        const button = event.target.closest("button[data-action]");
+        if (!button) return;
+        const action = button.dataset.action;
+        if (!ALERT_ACTIONS.has(action)) return;
+        saveSettings({
+          ...settings,
+          alertAction: action
+        });
+      });
+    }
+
+    maxPinnedGroup?.addEventListener("click", (event) => {
+      const button = event.target.closest("button[data-max-pinned]");
       if (!button) return;
-      const action = button.dataset.action;
-      if (!ALERT_ACTIONS.has(action)) return;
       saveSettings({
         ...settings,
-        alertAction: action
+        maxPinnedPopovers: clampPinnedLimit(button.dataset.maxPinned)
       });
     });
 
     for (const [listKey, config] of Object.entries(LIST_CONFIGS)) {
       const toggle = document.querySelector(config.toggle);
-      const form = document.querySelector(config.form);
-      const input = document.querySelector(config.input);
+      const form = config.form ? document.querySelector(config.form) : null;
+      const input = config.input ? document.querySelector(config.input) : null;
       const items = document.querySelector(config.items);
 
       toggle.addEventListener("change", () => {
@@ -102,7 +135,7 @@
         });
       });
 
-      form.addEventListener("submit", (event) => {
+      form?.addEventListener("submit", (event) => {
         event.preventDefault();
         const username = normalizeListUsername(input.value);
         if (!username) return;
@@ -126,12 +159,18 @@
     settingsVisible = visible;
     mainView.hidden = visible;
     settingsView.hidden = !visible;
-    settingsToggle.textContent = visible ? "戻る" : "設定";
+    settingsToggleIcon.className = `klt-icon klt-icon--${visible ? "arrow-left" : "gear"}`;
+    settingsToggleLabel.textContent = visible ? "戻る" : "設定";
     settingsToggle.setAttribute("aria-pressed", String(visible));
   }
 
   async function init() {
-    settings = await loadSettings();
+    const [loadedSettings, loadedSyncStatus] = await Promise.all([
+      loadSettings(),
+      loadFollowedChannelsSyncStatus()
+    ]);
+    settings = loadedSettings;
+    followedChannelsSyncStatus = loadedSyncStatus;
     renderSettings();
 
     const tab = await getActiveTab();
@@ -186,20 +225,27 @@
     }
 
     for (const user of users) {
-      const item = document.createElement("button");
+      const item = document.createElement("div");
       item.className = "klt-popup__item";
-      item.type = "button";
-      item.dataset.profileUrl = user.profileUrl || getProfileUrl(user.username);
-      item.title = `${user.username} のKickページを開く`;
+      item.title = `${user.username} を固定表示`;
 
       const skull = document.createElement("span");
       skull.className = "klt-popup__skull";
       skull.textContent = getDetectionIcon(user.reasons);
+      skull.dataset.pinUsername = user.username;
 
       const body = document.createElement("span");
-      const name = document.createElement("span");
-      name.className = "klt-popup__name";
-      name.textContent = user.username;
+      body.className = "klt-popup__item-content";
+
+      const name = document.createElement("button");
+      name.className = "klt-popup__name klt-popup__name-button";
+      name.type = "button";
+      const nameText = document.createElement("span");
+      nameText.className = "klt-popup__name-text";
+      nameText.textContent = user.username;
+      name.append(nameText, createIcon("external"));
+      name.dataset.profileUrl = user.profileUrl || getProfileUrl(user.username);
+      name.title = `${user.username} のKickページを開く`;
 
       const reasons = document.createElement("span");
       reasons.className = "klt-popup__reasons";
@@ -207,24 +253,53 @@
         ? user.reasons.join(" / ")
         : "検出";
 
-      body.append(name, reasons);
+      const detail = document.createElement("button");
+      detail.className = "klt-popup__item-body";
+      detail.type = "button";
+      detail.dataset.pinUsername = user.username;
+      detail.title = `${user.username} をポップアップ固定`;
+      const pinHint = document.createElement("span");
+      pinHint.className = "klt-popup__pin-hint";
+      pinHint.append(createIcon("pin"), document.createTextNode("固定"));
+      detail.appendChild(reasons);
       if (user.lastMessage) {
         const message = document.createElement("span");
         message.className = "klt-popup__message";
         message.textContent = user.lastMessage;
-        body.appendChild(message);
+        detail.appendChild(message);
       }
+      detail.appendChild(pinHint);
+
+      body.append(name, detail);
 
       item.append(skull, body);
       list.appendChild(item);
     }
   }
 
+  async function pinDetectedUser(username) {
+    if (!activeTabId || !username) return;
+
+    try {
+      const response = await sendTabMessage(activeTabId, {
+        type: PIN_CONTENT_USER_TYPE,
+        username
+      });
+      summary.textContent = response?.ok
+        ? `${username} を固定しました`
+        : response?.reason || "固定できませんでした";
+    } catch (_error) {
+      summary.textContent = "Kickページを再読み込みしてください。";
+    }
+  }
+
   function getDetectionIcon(reasons) {
     if (!Array.isArray(reasons)) return "💀";
+    if (reasons.some((reason) => /殺害|危害|暴力|脅迫/.test(reason))) return "🔪";
+    if (reasons.some((reason) => /個人情報|住所|電話番号|メール/.test(reason))) return "👤";
     if (reasons.includes("ウォッチリスト")) return "★";
     if (reasons.includes("配信者リスト")) return "K";
-    return "💀";
+    return reasons.length ? "🤖" : "💀";
   }
 
   function renderEmpty(message) {
@@ -236,8 +311,14 @@
   }
 
   function renderSettings() {
-    for (const button of actionGroup.querySelectorAll("button[data-action]")) {
-      button.classList.toggle("is-active", button.dataset.action === settings.alertAction);
+    for (const group of actionGroups) {
+      for (const button of group.querySelectorAll("button[data-action]")) {
+        button.classList.toggle("is-active", button.dataset.action === settings.alertAction);
+      }
+    }
+
+    for (const button of maxPinnedGroup?.querySelectorAll("button[data-max-pinned]") || []) {
+      button.classList.toggle("is-active", Number(button.dataset.maxPinned) === settings.maxPinnedPopovers);
     }
 
     for (const [listKey, config] of Object.entries(LIST_CONFIGS)) {
@@ -246,6 +327,8 @@
       toggle.checked = settings[config.enabledKey] !== false;
       renderUsernameChips(items, listKey, settings[listKey]);
     }
+
+    renderFollowedChannelsSyncStatus();
   }
 
   function renderUsernameChips(container, listKey, values) {
@@ -261,7 +344,7 @@
       remove.type = "button";
       remove.dataset.remove = username;
       remove.title = `${username} を削除`;
-      remove.textContent = "×";
+      remove.appendChild(createIcon("x"));
 
       chip.append(label, remove);
       container.appendChild(chip);
@@ -282,6 +365,13 @@
       updatedAt: Date.now(),
       users: []
     };
+  }
+
+  function createIcon(name) {
+    const icon = document.createElement("span");
+    icon.className = `klt-icon klt-icon--${name}`;
+    icon.setAttribute("aria-hidden", "true");
+    return icon;
   }
 
   async function getActiveTab() {
@@ -324,6 +414,19 @@
     });
   }
 
+  function loadFollowedChannelsSyncStatus() {
+    return new Promise((resolve) => {
+      chrome.storage.local.get(FOLLOWED_CHANNELS_SYNC_STORAGE_KEY, (result) => {
+        if (chrome.runtime.lastError) {
+          resolve(createDefaultFollowedChannelsSyncStatus());
+          return;
+        }
+
+        resolve(normalizeFollowedChannelsSyncStatus(result?.[FOLLOWED_CHANNELS_SYNC_STORAGE_KEY]));
+      });
+    });
+  }
+
   function saveSettings(nextSettings) {
     settings = normalizeSettings(nextSettings);
     renderSettings();
@@ -340,9 +443,11 @@
     const alertAction = ALERT_ACTIONS.has(next.alertAction)
       ? next.alertAction
       : DEFAULT_SETTINGS.alertAction;
+    const maxPinnedPopovers = clampPinnedLimit(next.maxPinnedPopovers);
 
     return {
       alertAction,
+      maxPinnedPopovers,
       watchlistEnabled: next.watchlistEnabled !== false,
       ignorelistEnabled: next.ignorelistEnabled !== false,
       broadcasterListEnabled: next.broadcasterListEnabled !== false,
@@ -389,8 +494,76 @@
     return /^[a-z0-9_.-]{1,32}$/.test(username) ? username : "";
   }
 
+  function clampPinnedLimit(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return DEFAULT_MAX_PINNED_POPOVERS;
+    return Math.min(MAX_PINNED_POPOVERS, Math.max(MIN_PINNED_POPOVERS, Math.round(numeric)));
+  }
+
   function getProfileUrl(username) {
     return `https://kick.com/${encodeURIComponent(String(username || "").replace(/^@/, ""))}`;
+  }
+
+  function renderFollowedChannelsSyncStatus() {
+    if (!broadcasterSyncStatus) return;
+
+    broadcasterSyncStatus.classList.remove("is-success", "is-failed");
+    if (!settings.broadcasterListEnabled) {
+      broadcasterSyncStatus.textContent = "配信者リストがOFFです。";
+      return;
+    }
+
+    const status = normalizeFollowedChannelsSyncStatus(followedChannelsSyncStatus);
+    if (status.state === "success") {
+      broadcasterSyncStatus.classList.add("is-success");
+      const source = status.source ? ` / ${status.source}` : "";
+      broadcasterSyncStatus.textContent = `自動読み込み済み: ${status.listCount}件${source}`;
+      return;
+    }
+
+    if (status.state === "failed") {
+      broadcasterSyncStatus.classList.add("is-failed");
+      broadcasterSyncStatus.textContent = `自動読み込み失敗: ${status.reason || "理由不明"}`;
+      return;
+    }
+
+    if (status.state === "running") {
+      broadcasterSyncStatus.textContent = "フォロー中チャンネルを読み込み中...";
+      return;
+    }
+
+    broadcasterSyncStatus.textContent = status.reason || "Kickページを開くと自動読み込みします。";
+  }
+
+  function normalizeFollowedChannelsSyncStatus(value) {
+    const status = value && typeof value === "object" ? value : {};
+    const state = ["idle", "running", "success", "failed", "disabled"].includes(status.state)
+      ? status.state
+      : "idle";
+
+    return {
+      state,
+      reason: String(status.reason || ""),
+      updatedAt: Number(status.updatedAt) || 0,
+      listCount: Number(status.listCount) || 0,
+      addedCount: Number(status.addedCount) || 0,
+      source: String(status.source || ""),
+      pageUrl: String(status.pageUrl || ""),
+      channelSlug: String(status.channelSlug || "")
+    };
+  }
+
+  function createDefaultFollowedChannelsSyncStatus() {
+    return {
+      state: "idle",
+      reason: "Kickページを開くと自動読み込みします。",
+      updatedAt: 0,
+      listCount: 0,
+      addedCount: 0,
+      source: "",
+      pageUrl: "",
+      channelSlug: ""
+    };
   }
 
   function getChannelSlugFromUrl(value) {

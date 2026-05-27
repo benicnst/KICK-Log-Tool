@@ -75,15 +75,20 @@
   function bindEvents() {
     debugFetchButton?.addEventListener("click", async () => {
       if (!debugOutput) return;
+      if (!activeTabId) {
+        debugOutput.textContent = "対象タブが見つかりません。Kickのタブを開いてください。";
+        return;
+      }
+
       debugOutput.textContent = "実行中...";
       try {
-        const resp = await sendRuntimeMessage({ type: "KLT_EXECUTE_PAGE_FETCH", path: "/api/v2/channels/followed?per_page=1" });
+        const resp = await sendRuntimeMessage({ type: "KLT_EXECUTE_PAGE_FETCH", path: "/api/v2/channels/followed?per_page=1", tabId: activeTabId });
         if (resp && resp.result) {
           debugOutput.textContent = JSON.stringify(resp.result, null, 2);
           return;
         }
 
-        const resp2 = await sendRuntimeMessage({ type: "KLT_EXECUTE_PAGE_FETCH", path: "/api/v1/channels/followed?per_page=1" });
+        const resp2 = await sendRuntimeMessage({ type: "KLT_EXECUTE_PAGE_FETCH", path: "/api/v1/channels/followed?per_page=1", tabId: activeTabId });
         debugOutput.textContent = JSON.stringify(resp2?.result || resp2 || {}, null, 2);
       } catch (e) {
         debugOutput.textContent = `エラー: ${String(e)}`;

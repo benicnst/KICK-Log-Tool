@@ -1826,6 +1826,17 @@
           return true;
         }
 
+        if (message.type === "KLT_GET_PAGE_CREDENTIALS") {
+          try {
+            const xsrf = getCookieValue("XSRF-TOKEN") || "";
+            const token = getStoredKickAuthToken() || "";
+            sendResponse({ ok: true, xsrf, token });
+          } catch (e) {
+            sendResponse({ ok: false, error: String(e) });
+          }
+          return true;
+        }
+
         return false;
       });
     } catch (_error) {

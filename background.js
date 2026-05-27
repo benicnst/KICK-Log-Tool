@@ -61,8 +61,9 @@
         chrome.scripting.executeScript({
           target: { tabId: Number(tabId) },
           world: "MAIN",
-          func: (path, origin) => {
-            return fetch(origin + path, { credentials: "include", headers: { Accept: "application/json" } })
+          func: (path, origin, extraHeaders) => {
+            const headers = Object.assign({ Accept: "application/json" }, extraHeaders || {});
+            return fetch(origin + path, { credentials: "include", headers })
               .then(async (r) => {
                 const text = await r.text();
                 try {
@@ -73,7 +74,7 @@
               })
               .catch((e) => ({ error: String(e) }));
           },
-          args: [String(message.path || ""), String(message.origin || "https://kick.com")]
+          args: [String(message.path || ""), String(message.origin || "https://kick.com"), message.headers || {}]
         }, (results) => {
           const res = results?.[0]?.result;
           sendResponse?.({ ok: true, result: res });

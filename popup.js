@@ -82,13 +82,25 @@
 
       debugOutput.textContent = "実行中...";
       try {
-        const resp = await sendRuntimeMessage({ type: "KLT_EXECUTE_PAGE_FETCH", path: "/api/v2/channels/followed?per_page=1", tabId: activeTabId });
+        // Request page credentials from content script
+        let creds = null;
+        try {
+          creds = await sendTabMessage(activeTabId, { type: "KLT_GET_PAGE_CREDENTIALS" });
+        } catch (_e) {
+          creds = null;
+        }
+
+        const headers = { "X-Requested-With": "XMLHttpRequest" };
+        if (creds && creds.xsrf) headers["X-XSRF-TOKEN"] = creds.xsrf;
+        if (creds && creds.token) headers["Authorization"] = `Bearer ${creds.token}`;
+
+        const resp = await sendRuntimeMessage({ type: "KLT_EXECUTE_PAGE_FETCH", path: "/api/v2/channels/followed?per_page=1", tabId: activeTabId, headers });
         if (resp && resp.result) {
           debugOutput.textContent = JSON.stringify(resp.result, null, 2);
           return;
         }
 
-        const resp2 = await sendRuntimeMessage({ type: "KLT_EXECUTE_PAGE_FETCH", path: "/api/v1/channels/followed?per_page=1", tabId: activeTabId });
+        const resp2 = await sendRuntimeMessage({ type: "KLT_EXECUTE_PAGE_FETCH", path: "/api/v1/channels/followed?per_page=1", tabId: activeTabId, headers });
         debugOutput.textContent = JSON.stringify(resp2?.result || resp2 || {}, null, 2);
       } catch (e) {
         debugOutput.textContent = `エラー: ${String(e)}`;

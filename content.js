@@ -1865,6 +1865,20 @@
       collectSidebarFollowingUsernames(usernames);
     }
 
+    // If still empty, try regex-based scan of page HTML as last resort.
+    if (!usernames.size) {
+      try {
+        const regexUsernames = extractUsernamesByRegex();
+        for (const u of regexUsernames) {
+          const key = normalizeUsername(u);
+          if (!key) continue;
+          usernames.set(key, u);
+        }
+      } catch (_e) {
+        // ignore
+      }
+    }
+
     return [...usernames.keys()].slice(0, MAX_BROADCASTER_LIST_USERS);
   }
 
@@ -1910,6 +1924,36 @@
         if (!text || text.length > 80) return false;
         return /フォロー中|following/i.test(text);
       });
+  }
+
+  // Fallback: scan page HTML with regex to find candidate usernames and profile links.
+  function extractUsernamesByRegex() {
+    const html = document.documentElement.innerHTML || "";
+    const results = new Set();
+    const ignored = new Set([
+      "about","api","browse","chatroom","communities","dashboard","embed","following","home","login","logout","messages","mobile","popout","search","settings","signup","store","subscriptions","video","videos"
+    ]);
+
+    // Match profile-like hrefs: /username or https://kick.com/username
+    const hrefRx = /(?:https?:\/\/(?:www\.)?kick\.com|href=)\s*["']?\/?([A-Za-z0-9_.-]{1,32})["'\/>\s]/gi;
+    let m;
+    while ((m = hrefRx.exec(html))) {
+      const candidate = m[1];
+      if (!candidate) continue;
+      if (ignored.has(candidate.toLowerCase())) continue;
+      if (looksLikeUsernameToken(candidate, { allowNumericOnly: true })) results.add(candidate);
+    }
+
+    // Match @username occurrences
+    const atRx = /@([A-Za-z0-9_.-]{1,32})/g;
+    while ((m = atRx.exec(html))) {
+      const candidate = m[1];
+      if (!candidate) continue;
+      if (ignored.has(candidate.toLowerCase())) continue;
+      if (looksLikeUsernameToken(candidate, { allowNumericOnly: true })) results.add(candidate);
+    }
+
+    return [...results].slice(0, MAX_BROADCASTER_LIST_USERS);
   }
 
   function getFollowingSearchRoot(label) {
@@ -1986,20 +2030,21 @@
     try {
       const apiResult = await fetchFollowedChannelUsernames();
 
+      // If API probe failed (unauthenticated or blocked), fall back to visible UI scraping.
       if (apiResult.reason) {
-        const reason = apiResult.reason;
-        await updateFollowedChannelsSyncStatus("failed", reason);
-        return;
+        // keep the reason for status but continue to attempt visible scraping
+        await updateFollowedChannelsSyncStatus("running", `API probe: ${apiResult.reason}`);
       }
 
-      const visibleUsernames = apiResult.usernames.length ? [] : getVisibleFollowingUsernames();
+      const visibleUsernames = getVisibleFollowingUsernames();
       const usernames = normalizeUsernameList(
-        apiResult.usernames.length ? apiResult.usernames : visibleUsernames,
+        (Array.isArray(apiResult.usernames) && apiResult.usernames.length) ? apiResult.usernames : visibleUsernames,
         MAX_BROADCASTER_LIST_USERS
       );
 
       if (!usernames.length) {
-        await updateFollowedChannelsSyncStatus("failed", "フォロー中チャンネルが見つかりませんでした。");
+        const reason = apiResult.reason || "フォロー中チャンネルが見つかりませんでした。";
+        await updateFollowedChannelsSyncStatus("failed", reason);
         return;
       }
 
@@ -2009,8 +2054,8 @@
       await updateFollowedChannelsSyncStatus("success", "", {
         addedCount: result.addedCount,
         listCount: result.listCount,
-        totalCount: apiResult.totalCount || 0,
-        source: apiResult.usernames.length ? apiResult.source || "Kick API" : "表示中のフォロー中欄"
+        totalCount: apiResult.totalCount || visibleUsernames.length || 0,
+        source: (Array.isArray(apiResult.usernames) && apiResult.usernames.length) ? apiResult.source || "Kick API" : "表示中のフォロー中欄"
       });
     } finally {
       followedChannelsSyncRunning = false;

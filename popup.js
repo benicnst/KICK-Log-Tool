@@ -11,15 +11,17 @@
   const MAX_LIST_USERS = 200;
   const MAX_BROADCASTER_LIST_USERS = 500;
   const DEFAULT_MAX_PINNED_POPOVERS = 3;
-  const MIN_PINNED_POPOVERS = 1;
+  const MIN_PINNED_POPOVERS = 0;
   const MAX_PINNED_POPOVERS = 5;
   const ALERT_ACTIONS = new Set(["notify", "temporary", "auto-pin", "off"]);
   const DEFAULT_SETTINGS = {
     alertAction: "auto-pin",
     maxPinnedPopovers: DEFAULT_MAX_PINNED_POPOVERS,
+    temporaryPopupDuration: 0,
     watchlistEnabled: true,
     ignorelistEnabled: true,
     broadcasterListEnabled: true,
+    botDetectionEnabled: true,
     watchlist: [],
     ignorelist: [],
     broadcasterList: []
@@ -64,11 +66,30 @@
   let settingsVisible = false;
   let settings = { ...DEFAULT_SETTINGS };
   let followedChannelsSyncStatus = createDefaultFollowedChannelsSyncStatus();
+  const debugFetchButton = document.querySelector("#debug-fetch");
+  const debugOutput = document.querySelector("#debug-output");
 
   bindEvents();
   init();
 
   function bindEvents() {
+    debugFetchButton?.addEventListener("click", async () => {
+      if (!debugOutput) return;
+      debugOutput.textContent = "実行中...";
+      try {
+        const resp = await sendRuntimeMessage({ type: "KLT_EXECUTE_PAGE_FETCH", path: "/api/v2/channels/followed?per_page=1" });
+        if (resp && resp.result) {
+          debugOutput.textContent = JSON.stringify(resp.result, null, 2);
+          return;
+        }
+
+        const resp2 = await sendRuntimeMessage({ type: "KLT_EXECUTE_PAGE_FETCH", path: "/api/v1/channels/followed?per_page=1" });
+        debugOutput.textContent = JSON.stringify(resp2?.result || resp2 || {}, null, 2);
+      } catch (e) {
+        debugOutput.textContent = `エラー: ${String(e)}`;
+      }
+    });
+
     clearButton.addEventListener("click", clearDetectedUsers);
     settingsToggle.addEventListener("click", toggleSettingsView);
 
@@ -120,6 +141,16 @@
       });
     });
 
+    const durationSelect = document.querySelector("#temporary-popup-duration");
+    durationSelect?.addEventListener("change", () => {
+      const dur = clampTemporaryPopupDuration(durationSelect.value);
+      updateDurationLabel(dur);
+      saveSettings({
+        ...settings,
+        temporaryPopupDuration: dur
+      });
+    });
+
     for (const [listKey, config] of Object.entries(LIST_CONFIGS)) {
       const toggle = document.querySelector(config.toggle);
       const form = config.form ? document.querySelector(config.form) : null;
@@ -147,6 +178,14 @@
         saveSettings(removeUsernameFromList(settings, listKey, button.dataset.remove));
       });
     }
+
+    const botToggle = document.querySelector("#bot-detection-enabled");
+    botToggle?.addEventListener("change", () => {
+      saveSettings({
+        ...settings,
+        botDetectionEnabled: botToggle.checked
+      });
+    });
   }
 
   function toggleSettingsView() {
@@ -323,10 +362,40 @@
       const toggle = document.querySelector(config.toggle);
       const items = document.querySelector(config.items);
       toggle.checked = settings[config.enabledKey] !== false;
-      renderUsernameChips(items, listKey, settings[listKey]);
+      if (listKey === "broadcasterList") {
+        renderBroadcasterCount(items, settings[listKey]);
+      } else {
+        renderUsernameChips(items, listKey, settings[listKey]);
+      }
+    }
+
+    const botToggle = document.querySelector("#bot-detection-enabled");
+    if (botToggle) botToggle.checked = settings.botDetectionEnabled !== false;
+
+    const durationSelect = document.querySelector("#temporary-popup-duration");
+    if (durationSelect) {
+      const dur = clampTemporaryPopupDuration(settings.temporaryPopupDuration);
+      durationSelect.value = String(dur);
+      updateDurationLabel(dur);
     }
 
     renderFollowedChannelsSyncStatus();
+  }
+
+  function updateDurationLabel(dur) {
+    const label = document.querySelector("#temporary-popup-duration-label");
+    if (label) label.textContent = dur === 0 ? "" : "秒";
+  }
+
+  function renderBroadcasterCount(container, values) {
+    container.replaceChildren();
+    const count = Array.isArray(values) ? values.length : 0;
+    const status = normalizeFollowedChannelsSyncStatus(followedChannelsSyncStatus);
+    const total = status.totalCount > 0 && status.totalCount >= count ? `/${status.totalCount}` : "";
+    const el = document.createElement("span");
+    el.className = "klt-popup__broadcaster-count";
+    el.textContent = `チャンネル合計 ${count}${total}件`;
+    container.appendChild(el);
   }
 
   function renderUsernameChips(container, listKey, values) {
@@ -449,6 +518,8 @@
       watchlistEnabled: next.watchlistEnabled !== false,
       ignorelistEnabled: next.ignorelistEnabled !== false,
       broadcasterListEnabled: next.broadcasterListEnabled !== false,
+      botDetectionEnabled: next.botDetectionEnabled !== false,
+      temporaryPopupDuration: clampTemporaryPopupDuration(next.temporaryPopupDuration),
       watchlist: normalizeUsernameList(next.watchlist),
       ignorelist: normalizeUsernameList(next.ignorelist),
       broadcasterList: normalizeUsernameList(next.broadcasterList, MAX_BROADCASTER_LIST_USERS)
@@ -498,6 +569,13 @@
     return Math.min(MAX_PINNED_POPOVERS, Math.max(MIN_PINNED_POPOVERS, Math.round(numeric)));
   }
 
+  function clampTemporaryPopupDuration(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return 0;
+    if (numeric === 0) return 0;
+    return Math.min(10, Math.max(3, Math.round(numeric)));
+  }
+
   function getProfileUrl(username) {
     return `https://kick.com/${encodeURIComponent(String(username || "").replace(/^@/, ""))}`;
   }
@@ -515,7 +593,8 @@
     if (status.state === "success") {
       broadcasterSyncStatus.classList.add("is-success");
       const source = status.source ? ` / ${status.source}` : "";
-      broadcasterSyncStatus.textContent = `自動読み込み済み: ${status.listCount}件${source}`;
+      const total = status.totalCount > 0 ? `/${status.totalCount}` : "";
+      broadcasterSyncStatus.textContent = `自動読み込み済み: ${status.listCount}${total}件${source}`;
       return;
     }
 
@@ -544,6 +623,7 @@
       reason: String(status.reason || ""),
       updatedAt: Number(status.updatedAt) || 0,
       listCount: Number(status.listCount) || 0,
+      totalCount: Number(status.totalCount) || 0,
       addedCount: Number(status.addedCount) || 0,
       source: String(status.source || ""),
       pageUrl: String(status.pageUrl || ""),

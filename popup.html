@@ -38,13 +38,9 @@
                 <span class="klt-icon klt-icon--bell" aria-hidden="true"></span>
                 <span>通知</span>
               </button>
-              <button type="button" data-action="temporary">
-                <span class="klt-icon klt-icon--popup" aria-hidden="true"></span>
-                <span>一時表示</span>
-              </button>
               <button type="button" data-action="auto-pin">
-                <span class="klt-icon klt-icon--pin" aria-hidden="true"></span>
-                <span>自動固定</span>
+                <span class="klt-icon klt-icon--popup" aria-hidden="true"></span>
+                <span>自動ポップアップ</span>
               </button>
               <button type="button" data-action="off">
                 <span class="klt-icon klt-icon--ban" aria-hidden="true"></span>
@@ -77,7 +73,7 @@
                   <span class="klt-icon klt-icon--users" aria-hidden="true"></span>
                   <span>配信者</span>
                 </div>
-                <div class="klt-popup__hint">ログイン中のフォロー中チャンネルを自動で読み込みます。</div>
+                <div class="klt-popup__hint">配信者のコメントを検出します。</div>
               </div>
               <label class="klt-popup__toggle">
                 <input id="broadcaster-list-enabled" type="checkbox">
@@ -85,7 +81,27 @@
               </label>
             </div>
             <div id="broadcaster-sync-status" class="klt-popup__sync-status">読み込み状況を確認中...</div>
+            <div style="margin-top:8px;">
+              <button id="debug-fetch" type="button" class="klt-popup__debug-button">デバッグ: フォロー数取得</button>
+              <div id="debug-output" class="klt-popup__debug-output" style="margin-top:6px;font-size:12px;white-space:pre-wrap;max-height:120px;overflow:auto;"></div>
+            </div>
             <div id="broadcaster-list-items" class="klt-popup__chips"></div>
+          </div>
+
+          <div class="klt-popup__setting" data-list-setting="botDetection">
+            <div class="klt-popup__setting-header">
+              <div>
+                <div class="klt-popup__label">
+                  <span class="klt-icon klt-icon--search" aria-hidden="true"></span>
+                  <span>BOT/連投</span>
+                </div>
+                <div class="klt-popup__hint">不審な投稿パターンを自動検出します。</div>
+              </div>
+              <label class="klt-popup__toggle">
+                <input id="bot-detection-enabled" type="checkbox">
+                <span></span>
+              </label>
+            </div>
           </div>
 
           <div class="klt-popup__setting" data-list-setting="watchlist">
@@ -115,18 +131,32 @@
           <div class="klt-popup__setting">
             <div class="klt-popup__label">
               <span class="klt-icon klt-icon--pin" aria-hidden="true"></span>
-              <span>自動固定数</span>
+              <span>自動ポップアップ</span>
             </div>
-            <div class="klt-popup__hint">検出時の動作が自動固定の場合に使います。</div>
+            <div class="klt-popup__hint">検出時の動作が自動ポップアップの場合に使います。</div>
             <div class="klt-popup__pin-select-row">
-              <select id="max-pinned-popovers" class="klt-popup__pin-select" aria-label="自動固定する最大数">
+              <span class="klt-icon klt-icon--person" aria-hidden="true"></span>
+              <select id="max-pinned-popovers" class="klt-popup__pin-select" aria-label="自動ポップアップする最大数">
+                <option value="0">0</option>
                 <option value="1">1</option>
                 <option value="2">2</option>
                 <option value="3">3</option>
                 <option value="4">4</option>
                 <option value="5">5</option>
               </select>
-              <span>人まで</span>
+              <span>人</span>
+              <select id="temporary-popup-duration" class="klt-popup__pin-select" aria-label="ポップアップ表示時間">
+                <option value="0">固定</option>
+                <option value="3">3</option>
+                <option value="4">4</option>
+                <option value="5">5</option>
+                <option value="6">6</option>
+                <option value="7">7</option>
+                <option value="8">8</option>
+                <option value="9">9</option>
+                <option value="10">10</option>
+              </select>
+              <span id="temporary-popup-duration-label">秒</span>
             </div>
           </div>
 

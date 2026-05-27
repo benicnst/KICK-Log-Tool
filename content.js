@@ -1996,6 +1996,63 @@
     return candidates[0] || rootRect.bottom || window.innerHeight;
   }
 
+  // Auto-scroll helper: scrolls a following-list root to load items and collects usernames
+  const FOLLOWED_CHANNELS_AUTO_SCROLL_MS = 900;
+  const FOLLOWED_CHANNELS_SCROLL_STEPS = 8;
+  const FOLLOWED_CHANNELS_SCROLL_STEP_PX = 800;
+
+  function delay(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  async function autoScrollAndCollect(root) {
+    if (!root || !root.querySelectorAll) return [];
+
+    const seen = new Set();
+    const collectFromRoot = () => {
+      for (const link of root.querySelectorAll("a[href]")) {
+        if (!isVisibleElement(link)) continue;
+        const username = getUsernameFromProfileLink(link);
+        if (!username) continue;
+        const key = normalizeUsername(username);
+        if (!key) continue;
+        seen.add(username);
+      }
+    };
+
+    collectFromRoot();
+
+    let lastSize = seen.size;
+    for (let i = 0; i < FOLLOWED_CHANNELS_SCROLL_STEPS; i += 1) {
+      try {
+        root.scrollTop = root.scrollHeight;
+      } catch (_e) {
+        try { window.scrollTo(0, document.body.scrollHeight); } catch (_e2) {}
+      }
+
+      await delay(FOLLOWED_CHANNELS_AUTO_SCROLL_MS);
+      collectFromRoot();
+      if (seen.size > lastSize) {
+        lastSize = seen.size;
+        continue;
+      }
+
+      // try a small incremental scroll to trigger lazy load
+      try { root.scrollBy(0, FOLLOWED_CHANNELS_SCROLL_STEP_PX); } catch (_e) { try { window.scrollBy(0, FOLLOWED_CHANNELS_SCROLL_STEP_PX); } catch (_e2) {} }
+      await delay(FOLLOWED_CHANNELS_AUTO_SCROLL_MS / 2);
+      collectFromRoot();
+      if (seen.size > lastSize) {
+        lastSize = seen.size;
+        continue;
+      }
+
+      // no more new items — break
+      break;
+    }
+
+    return [...seen].slice(0, MAX_BROADCASTER_LIST_USERS);
+  }
+
   function isMaybeLoggedIn() {
     const loginLink = document.querySelector('a[href*="/login"]');
     if (loginLink && isVisibleElement(loginLink)) return false;

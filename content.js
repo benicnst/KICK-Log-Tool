@@ -145,6 +145,7 @@
   let lastFollowedChannelsSyncAt = 0;
   let followedChannelsSyncRetryCount = 0;
   let followedChannelsSyncStatus = createFollowedChannelsSyncStatus("idle", "Kickページを開くと自動読み込みします。");
+  let runtimeMessagingInvalidated = false;
 
   const USERNAME_SELECTOR = [
     "[data-chat-entry-user]",
@@ -2013,12 +2014,18 @@
       const reasonLabel = Array.isArray(reasons) && reasons.length
         ? reasons.join(" / ")
         : "検出";
-      sendRuntimeMessage({
-        type: "KLT_SHOW_NOTIFICATION",
-        username: String(username),
-        channelSlug: activeChannelSlug || getChannelSlug() || "",
-        reasonLabel
-      });
+      try {
+        sendRuntimeMessage({
+          type: "KLT_SHOW_NOTIFICATION",
+          username: String(username),
+          channelSlug: activeChannelSlug || getChannelSlug() || "",
+          reasonLabel
+        });
+      } catch (error) {
+        if (isContextInvalidatedError(error)) {
+          runtimeMessagingInvalidated = true;
+        }
+      }
       return;
     }
 
@@ -2123,12 +2130,20 @@
 
     try {
       chrome.runtime.sendMessage(message, () => {
-        const error = chrome.runtime.lastError;
+        const error = getRuntimeLastError();
+        if (error && isContextInvalidatedError(error)) {
+          runtimeMessagingInvalidated = true;
+          return;
+        }
         if (error && attempt < 2) {
           window.setTimeout(() => sendRuntimeMessage(message, attempt + 1), 1000);
         }
       });
-    } catch (_error) {
+    } catch (error) {
+      if (isContextInvalidatedError(error)) {
+        runtimeMessagingInvalidated = true;
+        return;
+      }
       if (attempt < 2) {
         window.setTimeout(() => sendRuntimeMessage(message, attempt + 1), 1000);
       }
@@ -2136,11 +2151,26 @@
   }
 
   function hasRuntimeMessaging() {
+    if (runtimeMessagingInvalidated) return false;
     try {
       return Boolean(globalThis.chrome?.runtime?.id && globalThis.chrome?.runtime?.sendMessage);
     } catch (_error) {
       return false;
     }
+  }
+
+  function getRuntimeLastError() {
+    try {
+      return chrome.runtime.lastError || null;
+    } catch (_error) {
+      runtimeMessagingInvalidated = true;
+      return null;
+    }
+  }
+
+  function isContextInvalidatedError(error) {
+    const text = String(error?.message || error || "");
+    return /Extension context invalidated/i.test(text);
   }
 
   function installRuntimeMessageListener() {

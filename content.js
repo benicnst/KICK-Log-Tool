@@ -23,6 +23,7 @@
   const FOLLOWED_CHANNELS_REFRESH_MS = 10 * 60 * 1000;
   const FOLLOWED_CHANNELS_MAX_PAGES = 5;
   const MAX_BROADCASTER_LIST_USERS = 500;
+  const MAX_API_BACKFILL_MESSAGES = 10;
   const PINNED_API_REFRESH_MS = 15 * 1000;
   const PINNED_API_LOOKBACK_WINDOWS = 2;
   const BACKFILL_RETRY_MS = 45 * 1000;
@@ -33,12 +34,23 @@
   const TIMESTAMP_CORRECTION_MAX_ATTEMPTS = 3;
   const REALTIME_TIMESTAMP_TRUST_DELAY_MS = 8000;
   const REALTIME_TIMESTAMP_MAX_ROWS = 80;
+  const WS_ACTIVE_DOM_SCAN_INTERVAL_MS = 8000;
+  const WS_ACTIVE_GRACE_MS = 15000;
   const SUSPICIOUS_REPORT_RETRY_MS = 4000;
   const EMOTE_PLACEHOLDER = "[emote]";
   const MASS_REPEAT_MIN_LENGTH = 24;
   const MASS_REPEAT_STRONG_LENGTH = 80;
   const EMOTE_SPAM_MIN_COUNT = 12;
   const EMOTE_SPAM_STRONG_COUNT = 20;
+  const BOT_SCORE_THRESHOLD = 60;
+  const BOT_RULE_MATCH_THRESHOLD = 2;
+  const SUSPICIOUS_EVAL_DEBOUNCE_MS = 1200;
+  const COORDINATED_SPAM_WINDOW_MS = 25 * 1000;
+  const COORDINATED_SPAM_MIN_USERS = 2;
+  const COORDINATED_SPAM_MIN_EVENTS = 3;
+  const COORDINATED_SPAM_BUCKET_COOLDOWN_MS = 10 * 1000;
+  const COORDINATED_SPAM_MIN_TEXT_LENGTH = 28;
+  const COORDINATED_SPAM_MIN_NORMALIZED_LENGTH = 14;
   const BACKFILL_WINDOW_OFFSETS_MINUTES = [
     1, 2, 4, 8, 15, 30, 45, 60, 90, 120, 180, 240
   ];
@@ -46,10 +58,11 @@
   const DEFAULT_SETTINGS = {
     alertAction: "auto-pin",
     maxPinnedPopovers: DEFAULT_MAX_PINNED_POPOVERS,
-    temporaryPopupDuration: 0,
+    temporaryPopupDuration: 8,
     watchlistEnabled: true,
     ignorelistEnabled: true,
     broadcasterListEnabled: true,
+    botDetectionEnabled: true,
     watchlist: [],
     ignorelist: [],
     broadcasterList: []
@@ -66,12 +79,20 @@
   const pinnedCards = new Map();
   const autoPinnedUsers = new Set();
   const autoPinDismissedUsers = new Set();
+  const notifiedUsers = new Set();
+  const broadcasterAvatarCache = new Map();
   const suspiciousUsers = new Map();
+  const suspiciousEvalAt = new Map();
   const lastUserAnchors = new Map();
-  const apiWindowCache = new Set();
+  const apiWindowCache = new Map();
   const pinnedApiCheckingUsers = new Set();
   const userBackfillState = new Map();
   const pendingTimestampCorrections = new Map();
+  const coordinatedSpamBuckets = new Map();
+  const skipReasonCounts = Object.create(null);
+  const skipReasonLastAt = Object.create(null);
+  const sourceAcceptedCounts = Object.create(null);
+  const sourceDedupedCounts = Object.create(null);
   const apiDebug = {
     attempts: 0,
     contextAttempts: 0,
@@ -110,6 +131,10 @@
   let timestampCorrectionRunning = false;
   let lastTimestampCorrectionAt = 0;
   let realtimeTimestampTrustReadyAt = Date.now() + REALTIME_TIMESTAMP_TRUST_DELAY_MS;
+  let lastRealtimeWsMessageAt = 0;
+  let realtimeWsMessagesAccepted = 0;
+  let realtimeWsMessagesSeen = 0;
+  let lastPeriodicDomScanAt = 0;
   let routeResetInProgress = false;
   let pinnedDragState = null;
   let popoverShownAt = 0;
@@ -157,6 +182,51 @@
       .replace(/^@/, "")
       .trim()
       .toLowerCase();
+  }
+
+  function normalizeSourceKey(source) {
+    const value = String(source || "").toLowerCase();
+    if (value.startsWith("realtime-ws")) return "realtime-ws";
+    if (value.startsWith("realtime")) return "realtime";
+    if (value.startsWith("dom")) return "dom";
+    if (value.startsWith("observed")) return "observed";
+    if (value === "api") return "api";
+    return value || "unknown";
+  }
+
+  function incrementCounter(store, key) {
+    store[key] = Number(store[key] || 0) + 1;
+  }
+
+  function noteSkipReason(reason, throttleMs = 0) {
+    const key = String(reason || "").trim();
+    if (!key) return;
+    const now = Date.now();
+    const lastAt = Number(skipReasonLastAt[key] || 0);
+    if (throttleMs > 0 && now - lastAt < throttleMs) return;
+    skipReasonLastAt[key] = now;
+    incrementCounter(skipReasonCounts, key);
+  }
+
+  function getDiagnosticsSnapshot() {
+    return {
+      skipReasons: { ...skipReasonCounts },
+      acceptedBySource: { ...sourceAcceptedCounts },
+      dedupedBySource: { ...sourceDedupedCounts }
+    };
+  }
+
+  function clearObjectCounters(store) {
+    for (const key of Object.keys(store)) {
+      delete store[key];
+    }
+  }
+
+  function resetDiagnostics() {
+    clearObjectCounters(skipReasonCounts);
+    clearObjectCounters(skipReasonLastAt);
+    clearObjectCounters(sourceAcceptedCounts);
+    clearObjectCounters(sourceDedupedCounts);
   }
 
   function getChannelSlug() {
@@ -349,6 +419,7 @@
       watchlistEnabled: settings.watchlistEnabled !== false,
       ignorelistEnabled: settings.ignorelistEnabled !== false,
       broadcasterListEnabled: settings.broadcasterListEnabled !== false,
+      botDetectionEnabled: settings.botDetectionEnabled !== false,
       watchlist: normalizeUsernameList(settings.watchlist),
       ignorelist: normalizeUsernameList(settings.ignorelist),
       broadcasterList: normalizeUsernameList(settings.broadcasterList, MAX_BROADCASTER_LIST_USERS)
@@ -390,8 +461,7 @@
 
   function clampTemporaryPopupDuration(value) {
     const numeric = Number(value);
-    if (!Number.isFinite(numeric)) return 0;
-    if (numeric === 0) return 0;
+    if (!Number.isFinite(numeric)) return DEFAULT_SETTINGS.temporaryPopupDuration;
     return Math.min(10, Math.max(3, Math.round(numeric)));
   }
 
@@ -628,21 +698,26 @@
 
   function isUsableUsernameElement(element) {
     if (!isVisibleElement(element)) return false;
-    return looksLikeUsernameToken(getUsernameValue(element), {
-      allowNumericOnly: Boolean(getUsernameFromProfileLink(element))
-    });
+    const username = getUsernameValue(element);
+    const allowNumericOnly = Boolean(getUsernameFromProfileLink(element)) ||
+      (isNumericOnlyUsername(username) && isExplicitClickableElement(element));
+    return looksLikeUsernameToken(username, { allowNumericOnly });
+  }
+
+  function isExplicitClickableElement(element) {
+    const tagName = element?.tagName?.toLowerCase();
+    const role = element?.getAttribute?.("role")?.toLowerCase() || "";
+    return tagName === "a" || tagName === "button" || role === "button" || role === "link";
   }
 
   function isProfileClickTarget(element) {
     if (getUsernameFromProfileLink(element)) return true;
 
-    const tagName = element.tagName?.toLowerCase();
-    const role = element.getAttribute?.("role")?.toLowerCase() || "";
-    const clickable = tagName === "button" || role === "button" || role === "link";
+    const clickable = isExplicitClickableElement(element);
     if (!clickable) return false;
 
     const label = getLabel(element);
-    if (!looksLikeUsername(label)) return false;
+    if (!looksLikeUsernameToken(label, { allowNumericOnly: true })) return false;
 
     const text = cleanText(element.innerText || element.textContent);
     return text === label || text.replace(/^@/, "") === label.replace(/^@/, "");
@@ -661,7 +736,8 @@
     }
 
     const username = getUsernameValue(usernameElement);
-    const allowNumericOnly = Boolean(getUsernameFromProfileLink(usernameElement));
+    const allowNumericOnly = Boolean(getUsernameFromProfileLink(usernameElement)) ||
+      (isProfileClickTarget(usernameElement) && isNumericOnlyUsername(username));
     if (!looksLikeUsernameToken(username, { allowNumericOnly })) return null;
 
     return {
@@ -806,12 +882,17 @@
     return context.measureText(text).width;
   }
 
-  function extractMessageText(row, username) {
+  function extractMessageText(row, username, usernameElement = null) {
+    const afterUsernameText = normalizeMessageContent(
+      removeLeadingBadgeText(getRichTextAfterElement(row, usernameElement))
+    );
+    if (afterUsernameText) return afterUsernameText;
+
     const explicitMessage = row.querySelector(
       "[data-testid*='message' i], [class*='message' i], [class*='content' i], [dir='auto']"
     );
 
-    if (explicitMessage) {
+    if (explicitMessage && (!usernameElement || !explicitMessage.contains(usernameElement))) {
       const richMessageText = normalizeMessageContent(removeUsernameFromText(getRichText(explicitMessage), username));
       if (richMessageText) return richMessageText;
     }
@@ -822,56 +903,91 @@
       return normalizeMessageContent(richParsedText || parsed.message);
     }
 
-    return normalizeMessageContent(removeUsernameFromText(getRichText(row), username));
+    return normalizeMessageContent(removeLeadingBadgeText(removeUsernameFromText(getRichText(row), username)));
   }
 
   function getRichText(root) {
-    if (!root || root.nodeType !== Node.ELEMENT_NODE) return cleanText(root?.textContent || "");
-
     const parts = [];
-
-    function visit(node) {
-      if (node.nodeType === Node.TEXT_NODE) {
-        parts.push(node.textContent || "");
-        return;
-      }
-
-      if (node.nodeType !== Node.ELEMENT_NODE) return;
-      const element = node;
-      if (!isVisibleElement(element)) return;
-
-      const tagName = element.tagName?.toLowerCase();
-      if (tagName === "img" || tagName === "svg" || tagName === "picture") {
-        parts.push(getMediaText(element));
-        return;
-      }
-
-      if (element.getAttribute("role") === "img") {
-        parts.push(getMediaText(element));
-        return;
-      }
-
-      for (const child of element.childNodes) {
-        visit(child);
-      }
-    }
-
-    visit(root);
+    appendRichTextNode(root, parts);
     return cleanText(parts.filter(Boolean).join(" "));
   }
 
+  function getRichTextAfterElement(root, marker) {
+    if (!root || !marker || root === marker || !root.contains?.(marker)) return "";
+
+    const parts = [];
+    let afterMarker = false;
+
+    function visitUntilMarker(node) {
+      if (node === marker) {
+        afterMarker = true;
+        return;
+      }
+
+      if (afterMarker) {
+        appendRichTextNode(node, parts);
+        return;
+      }
+
+      for (const child of node.childNodes || []) {
+        visitUntilMarker(child);
+      }
+    }
+
+    visitUntilMarker(root);
+    return cleanText(parts.filter(Boolean).join(" "));
+  }
+
+  function appendRichTextNode(node, parts) {
+    if (!node) return;
+
+    if (node.nodeType === Node.TEXT_NODE) {
+      parts.push(node.textContent || "");
+      return;
+    }
+
+    if (node.nodeType === Node.DOCUMENT_FRAGMENT_NODE || node.nodeType === Node.DOCUMENT_NODE) {
+      for (const child of node.childNodes || []) appendRichTextNode(child, parts);
+      return;
+    }
+
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+    const element = node;
+    if (!isVisibleElement(element)) return;
+
+    const tagName = element.tagName?.toLowerCase();
+    if (tagName === "img" || tagName === "svg" || tagName === "picture") {
+      parts.push(getMediaText(element));
+      return;
+    }
+
+    if (element.getAttribute("role") === "img") {
+      parts.push(getMediaText(element));
+      return;
+    }
+
+    for (const child of element.childNodes) {
+      appendRichTextNode(child, parts);
+    }
+  }
+
   function getMediaText(element) {
-    const label = cleanText(
+    const emoteContainer = element.closest("[data-emote-id]") || element.querySelector("[data-emote-id]") || element;
+    const emoteId = emoteContainer.getAttribute("data-emote-id") || element.getAttribute("data-emote-id") || "";
+    const emoteName = cleanText(
+      emoteContainer.getAttribute("data-emote-name") ||
+      element.getAttribute("data-emote-name") ||
       element.getAttribute("alt") ||
       element.getAttribute("aria-label") ||
       element.getAttribute("title") ||
-      element.getAttribute("data-emote-name") ||
       element.getAttribute("data-name") ||
       element.getAttribute("data-tooltip") ||
       ""
     );
-
-    const normalized = normalizeEmoteLabel(label);
+    if (emoteId && emoteName) return `[emote:${emoteId}:${emoteName}]`;
+    const normalized = normalizeEmoteLabel(emoteName || cleanText(
+      element.getAttribute("alt") || element.getAttribute("aria-label") || element.getAttribute("title") || ""
+    ));
     return normalized || EMOTE_PLACEHOLDER;
   }
 
@@ -888,7 +1004,22 @@
   function normalizeMessageContent(value) {
     return cleanText(value)
       .replace(/(?:\[emote\]\s*){2,}/g, (match) => match.trim().replace(/\s+/g, " "))
+      .replace(/^(\[emote\]\s*)+/, "")
+      .replace(/(\s*\[emote\])+$/, "")
       .trim();
+  }
+
+  function removeLeadingBadgeText(value) {
+    let text = cleanText(value);
+    const badgePattern = /^[:：]?\s*\d+\s*(?:months?|か月|ヶ月|カ月)\s*(?:チャンネル登録者|subscriber|subscribed|sub)\s*[:：]?\s*(?:\[emote\]\s*)?/i;
+
+    for (let index = 0; index < 3; index += 1) {
+      const next = cleanText(text.replace(badgePattern, ""));
+      if (next === text) break;
+      text = next;
+    }
+
+    return cleanText(text.replace(/^[:：]\s*/, ""));
   }
 
   function removeUsernameFromText(text, username) {
@@ -923,6 +1054,7 @@
 
   function rememberMessage(username, text, timestamp = Date.now(), messageId = "", source = "", timestampKind = "") {
     const messageSource = source || (messageId ? "api" : "dom");
+    const sourceKey = normalizeSourceKey(messageSource);
     const allowNumericOnly = messageSource === "api" || isTrustedNumericMessageSource(messageSource);
     const key = normalizeUsername(username);
     if (!key || !text || !looksLikeUsernameToken(username, { allowNumericOnly })) return false;
@@ -939,6 +1071,7 @@
     const duplicate = findDuplicateMessage(existing.messages, text, timestamp, messageId, messageSource);
 
     if (!duplicate) {
+      incrementCounter(sourceAcceptedCounts, sourceKey);
       existing.messages.unshift({
         id: messageId,
         text,
@@ -946,18 +1079,28 @@
         source: messageSource,
         timestampKind: resolvedTimestampKind
       });
-    } else if (messageSource === "api" && getMessageTimestampKind(duplicate) === "observed") {
-      duplicate.id = duplicate.id || messageId;
-      duplicate.timestamp = timestamp;
-      duplicate.source = "api";
-      duplicate.timestampKind = "posted";
-      duplicate.correctedTimestamp = true;
-    } else if (messageId && !duplicate.id) {
-      duplicate.id = messageId;
-      duplicate.timestampKind = duplicate.timestampKind || getMessageTimestampKind(duplicate);
+    } else {
+      incrementCounter(sourceDedupedCounts, sourceKey);
+      noteSkipReason(`duplicate:${sourceKey}`);
+
+      if (isTrustedPostedMessageSource(messageSource) && getMessageTimestampKind(duplicate) === "observed") {
+        duplicate.id = duplicate.id || messageId;
+        duplicate.timestamp = timestamp;
+        duplicate.source = messageSource;
+        duplicate.timestampKind = "posted";
+        duplicate.correctedTimestamp = true;
+      } else if (getMessageSourcePriority(messageSource) > getMessageSourcePriority(duplicate.source)) {
+        duplicate.id = duplicate.id || messageId;
+        duplicate.timestamp = timestamp;
+        duplicate.source = messageSource;
+        duplicate.timestampKind = resolvedTimestampKind;
+      } else if (messageId && !duplicate.id) {
+        duplicate.id = messageId;
+        duplicate.timestampKind = duplicate.timestampKind || getMessageTimestampKind(duplicate);
+      }
     }
 
-    if (!duplicate || messageSource === "api") {
+    if (!duplicate || isTrustedPostedMessageSource(messageSource)) {
       existing.messages.sort((a, b) => b.timestamp - a.timestamp);
       existing.messages = existing.messages.slice(0, MAX_MESSAGES);
     }
@@ -966,16 +1109,116 @@
     userHistory.set(key, existing);
     pruneUsers();
     scheduleSave();
-    if (!duplicate || messageSource === "api") refreshActivePopover(key);
+    if (!duplicate || isTrustedPostedMessageSource(messageSource)) refreshActivePopover(key);
     if (!duplicate) {
       handleListedUserCandidate(key, existing.displayName, messageSource);
+    }
+    if (shouldRunSuspiciousEvaluation(key, messageSource, resolvedTimestampKind, !duplicate)) {
       handleSuspiciousUserCandidate(key, existing.displayName, messageSource, resolvedTimestampKind);
     }
+    trackCoordinatedSpamCandidate(key, existing.displayName, text, timestamp, messageSource, resolvedTimestampKind, !duplicate);
     return !duplicate;
   }
 
+  function trackCoordinatedSpamCandidate(key, username, text, timestamp, messageSource, timestampKind, isNewMessage) {
+    if (!isNewMessage) return;
+    if (!isRealtimeSource(messageSource)) return;
+    if (normalizeTimestampKind(timestampKind) !== "posted") return;
+    if (getAlertAction() === "off") return;
+    if (userSettings.botDetectionEnabled === false) return;
+    if (isIgnoredUser(key)) return;
+
+    const rawText = cleanText(text);
+    if (rawText.length < COORDINATED_SPAM_MIN_TEXT_LENGTH) return;
+
+    const normalized = normalizeMessageForRisk(rawText);
+    if (!normalized || normalized.length < COORDINATED_SPAM_MIN_NORMALIZED_LENGTH) return;
+
+    const repetition = analyzeInternalRepetition(rawText);
+    const emoteCount = countEmoteLikeTokens(rawText);
+    if (!repetition.strong && emoteCount < 6) return;
+
+    const now = Number(timestamp) || Date.now();
+    const bucket = coordinatedSpamBuckets.get(normalized) || {
+      events: [],
+      lastTriggeredAt: 0
+    };
+
+    bucket.events.push({
+      key,
+      username,
+      timestamp: now,
+      text: rawText
+    });
+    bucket.events = bucket.events.filter((event) => now - event.timestamp <= COORDINATED_SPAM_WINDOW_MS);
+
+    coordinatedSpamBuckets.set(normalized, bucket);
+    pruneCoordinatedSpamBuckets(now);
+
+    const uniqueUsers = new Map();
+    for (const event of bucket.events) {
+      if (!uniqueUsers.has(event.key)) uniqueUsers.set(event.key, event.username);
+    }
+
+    if (uniqueUsers.size < COORDINATED_SPAM_MIN_USERS) return;
+    if (bucket.events.length < COORDINATED_SPAM_MIN_EVENTS) return;
+    if (now - Number(bucket.lastTriggeredAt || 0) < COORDINATED_SPAM_BUCKET_COOLDOWN_MS) return;
+
+    bucket.lastTriggeredAt = now;
+    const reason = "複数アカウント同一文連投";
+    const action = getAlertAction();
+    for (const [userKey, userName] of uniqueUsers.entries()) {
+      if (isIgnoredUser(userKey)) continue;
+      const history = userHistory.get(userKey);
+      rememberDetectedUser(userKey, userName, [reason], history?.messages || [], {
+        riskScore: 72,
+        riskRuleCount: 2,
+        riskCritical: false
+      });
+      runAlertAction(userKey, userName, action, [reason]);
+    }
+  }
+
+  function pruneCoordinatedSpamBuckets(now = Date.now()) {
+    for (const [pattern, bucket] of coordinatedSpamBuckets.entries()) {
+      bucket.events = (bucket.events || []).filter((event) => now - event.timestamp <= COORDINATED_SPAM_WINDOW_MS);
+      if (!bucket.events.length && now - Number(bucket.lastTriggeredAt || 0) > COORDINATED_SPAM_BUCKET_COOLDOWN_MS) {
+        coordinatedSpamBuckets.delete(pattern);
+      }
+    }
+
+    while (coordinatedSpamBuckets.size > MAX_USERS * 3) {
+      const oldestKey = coordinatedSpamBuckets.keys().next().value;
+      coordinatedSpamBuckets.delete(oldestKey);
+    }
+  }
+
+  function shouldRunSuspiciousEvaluation(key, messageSource, timestampKind, isNewMessage) {
+    if (!String(messageSource || "").startsWith("realtime")) return false;
+    if (normalizeTimestampKind(timestampKind) !== "posted") return false;
+
+    const now = Date.now();
+    const lastAt = suspiciousEvalAt.get(key) || 0;
+    const minInterval = isNewMessage ? 200 : SUSPICIOUS_EVAL_DEBOUNCE_MS;
+    if (now - lastAt < minInterval) {
+      noteSkipReason("suspicious_eval_skipped:debounced", 1500);
+      return false;
+    }
+
+    suspiciousEvalAt.set(key, now);
+    while (suspiciousEvalAt.size > MAX_USERS) {
+      const oldestKey = suspiciousEvalAt.keys().next().value;
+      suspiciousEvalAt.delete(oldestKey);
+    }
+    return true;
+  }
+
   function isTrustedNumericMessageSource(source) {
-    return /-profile$/.test(String(source || ""));
+    return source === "realtime-ws" || /-profile$/.test(String(source || ""));
+  }
+
+  function isTrustedPostedMessageSource(source) {
+    return source === "api" || source === "realtime-ws";
   }
 
   function findDuplicateMessage(messages, text, timestamp, messageId, messageSource) {
@@ -987,21 +1230,39 @@
     const sameText = messages.filter((message) => message.text === text);
     if (!sameText.length) return null;
 
-    if (messageSource === "api") {
-      const observedMatch = findNearestMessage(
-        sameText.filter((message) => {
-          return getMessageTimestampKind(message) === "observed" &&
-            Math.abs(message.timestamp - timestamp) < 10 * 60 * 1000;
-        }),
-        timestamp
-      );
-      if (observedMatch) return observedMatch;
+    const sourcePriority = getMessageSourcePriority(messageSource);
+    for (const message of sameText) {
+      if (messageId && message?.id && message.id !== messageId) {
+        // Distinct message IDs with same text should be kept as separate posts.
+        continue;
+      }
+      const tolerance = getDuplicateToleranceMs(message, messageSource);
+      if (Math.abs(message.timestamp - timestamp) > tolerance) continue;
+
+      const existingPriority = getMessageSourcePriority(message.source);
+      if (existingPriority >= sourcePriority) return message;
+      if (getMessageTimestampKind(message) === "observed") return message;
     }
 
-    return findNearestMessage(
-      sameText.filter((message) => Math.abs(message.timestamp - timestamp) < 2500),
-      timestamp
-    );
+    return findNearestMessage(sameText.filter((message) => {
+      if (messageId && message?.id && message.id !== messageId) return false;
+      return Math.abs(message.timestamp - timestamp) < getDuplicateToleranceMs(message, messageSource);
+    }), timestamp);
+  }
+
+  function getDuplicateToleranceMs(existingMessage, newSource) {
+    if (newSource === "api" || newSource === "realtime-ws" || existingMessage?.source === "api" || existingMessage?.source === "realtime-ws") {
+      return 15000;
+    }
+
+    return 2500;
+  }
+
+  function getMessageSourcePriority(source) {
+    if (source === "realtime-ws") return 3;
+    if (source === "api") return 2;
+    if (String(source || "").startsWith("dom")) return 1;
+    return 0;
   }
 
   function findNearestMessage(messages, timestamp) {
@@ -1024,7 +1285,7 @@
     if (!user) return null;
 
     rememberUserAnchor(user.username, row, user.usernameElement || row);
-    const messageText = extractMessageText(row, user.username);
+    const messageText = extractMessageText(row, user.username, user.usernameElement);
     if (!messageText || messageText === user.username) return null;
 
     const signature = `${normalizeUsername(user.username)}:${messageText}`;
@@ -1141,9 +1402,30 @@
 
   function periodicRefresh() {
     handlePossibleChannelChange();
-    scanPage();
+    if (shouldRunPeriodicDomScan()) scanPage();
     closeStaleHoverPopover();
     if (suspiciousUsers.size > 0) scheduleSuspiciousUsersReport(SUSPICIOUS_REPORT_RETRY_MS);
+  }
+
+  function shouldRunPeriodicDomScan() {
+    if (shouldPreferRealtimeWsIngestion()) {
+      noteSkipReason("dom_scan_skipped:ws_active", 2000);
+      return false;
+    }
+    const now = Date.now();
+    const interval = 2000;
+    if (now - lastPeriodicDomScanAt < interval) return false;
+
+    lastPeriodicDomScanAt = now;
+    return true;
+  }
+
+  function shouldPreferRealtimeWsIngestion() {
+    return hasRecentRealtimeWsMessage();
+  }
+
+  function hasRecentRealtimeWsMessage() {
+    return lastRealtimeWsMessageAt > 0 && Date.now() - lastRealtimeWsMessageAt < WS_ACTIVE_GRACE_MS;
   }
 
   function handlePossibleChannelChange() {
@@ -1206,6 +1488,12 @@
       apiWindows: apiWindowCache.size,
       pinnedApiChecking,
       pinnedApiUsers: [...pinnedCards.keys()],
+      websocket: {
+        active: hasRecentRealtimeWsMessage(),
+        messagesSeen: realtimeWsMessagesSeen,
+        messagesAccepted: realtimeWsMessagesAccepted,
+        lastMessageAt: lastRealtimeWsMessageAt
+      },
       followedChannelsSync: {
         enabled: userSettings.broadcasterListEnabled,
         running: followedChannelsSyncRunning,
@@ -1214,7 +1502,8 @@
         status: followedChannelsSyncStatus
       },
       chatPaused: isChatPaused(),
-      apiDebug
+      apiDebug,
+      diagnostics: getDiagnosticsSnapshot()
     }),
     backfillUser: backfillUserHistory,
     retryBackfill: (username) => {
@@ -1272,16 +1561,17 @@
     nameButton.title = `${displayName} のKickページを開く`;
     nameButton.setAttribute("aria-label", `${displayName} のKickページを開く`);
     if (risk.suspicious) {
+      const riskCategory = getDetectionCategory(risk.reasons);
       const marker = document.createElement("span");
-      marker.className = "kch-popover__risk";
+      marker.className = `kch-popover__risk kch-popover__risk--${riskCategory}`;
       marker.textContent = getDetectionIcon(risk.reasons);
-      marker.title = `検出理由: ${risk.reasons.join(" / ")}`;
+      marker.title = `検出理由: ${risk.reasons.join(" / ")} | score ${risk.score} (${risk.matchedRules}条件)`;
       nameElement.appendChild(marker);
     }
     if (pinnedApiCheckingUsers.has(key)) {
       const refresh = document.createElement("span");
       refresh.className = "kch-popover__refresh";
-      refresh.title = "固定ユーザーの新着コメントをAPIで確認中";
+      refresh.title = "固定ユーザーの過去コメントをAPIで補完中";
       refresh.innerHTML = `
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M20 11a8 8 0 0 0-14.7-4.4L3 9"></path>
@@ -1334,7 +1624,7 @@
 
         const text = document.createElement("div");
         text.className = "kch-popover__text";
-        text.textContent = message.text;
+        text.innerHTML = renderMessageWithEmotes(message.text);
 
         item.append(meta, text);
         list.appendChild(item);
@@ -1361,7 +1651,7 @@
   }
 
   function shouldShowRiskMarker(key) {
-    return getAlertAction() !== "off" && !isIgnoredUser(key);
+    return getAlertAction() !== "off" && userSettings.botDetectionEnabled !== false && !isIgnoredUser(key);
   }
 
   function positionPopover(anchor) {
@@ -1434,6 +1724,7 @@
 
   function closeStaleHoverPopover() {
     if (!activeRow || popover.hidden || isPointerOverPopover) return;
+    if (isTemporaryPopoverActive) return;
 
     if (isPointerInsideActiveHoverZone()) return;
     if (Date.now() - popoverShownAt < HOVER_GRACE_MS) return;
@@ -1561,6 +1852,9 @@
     }
     updatePinnedApiRefresh();
     fetchPinnedApiUpdates();
+    if (!auto) {
+      window.setTimeout(() => backfillUserHistory(username), 0);
+    }
     if (!auto) closeHoverPopover();
     return true;
   }
@@ -1606,6 +1900,7 @@
     if (routeResetInProgress) return;
     const action = getAlertAction();
     if (action === "off") return;
+    if (userSettings.botDetectionEnabled === false) return;
     if (isIgnoredUser(key)) return;
     if (!isRealtimeSource(messageSource)) return;
     if (normalizeTimestampKind(timestampKind) !== "posted") return;
@@ -1614,8 +1909,12 @@
     const risk = assessAccountRisk(history?.messages || []);
     if (!risk.suspicious) return;
 
-    rememberDetectedUser(key, username, risk.reasons, history?.messages || []);
-    runAlertAction(key, username, action);
+    rememberDetectedUser(key, username, risk.reasons, history?.messages || [], {
+      riskScore: risk.score,
+      riskRuleCount: risk.matchedRules,
+      riskCritical: risk.critical
+    });
+    runAlertAction(key, username, action, risk.reasons);
   }
 
   function isRealtimeSource(source) {
@@ -1635,10 +1934,10 @@
 
     const history = userHistory.get(key);
     rememberDetectedUser(key, username, reasons, history?.messages || []);
-    runAlertAction(key, username, getAlertAction());
+    runAlertAction(key, username, getAlertAction(), reasons);
   }
 
-  function rememberDetectedUser(key, username, reasons, messages) {
+  function rememberDetectedUser(key, username, reasons, messages, metadata = {}) {
     const existing = suspiciousUsers.get(key);
     const postedMessages = messages
       .filter((message) => message?.text && message?.timestamp)
@@ -1652,11 +1951,17 @@
         ...reasons
       ])
     ];
+    const detectionCategory = getDetectionCategory(mergedReasons);
 
     suspiciousUsers.set(key, {
       username,
       profileUrl: getKickProfileUrl(username),
+      avatarUrl: existing?.avatarUrl || "",
+      detectionCategory,
       reasons: mergedReasons,
+      riskScore: Math.max(Number(existing?.riskScore) || 0, Number(metadata.riskScore) || 0),
+      riskRuleCount: Math.max(Number(existing?.riskRuleCount) || 0, Number(metadata.riskRuleCount) || 0),
+      riskCritical: Boolean(existing?.riskCritical || metadata.riskCritical),
       firstDetectedAt: existing?.firstDetectedAt || now,
       lastDetectedAt: now,
       lastCommentAt: latestMessage?.timestamp || now,
@@ -1664,11 +1969,59 @@
       lastMessage: cleanText(latestMessage?.text || "").slice(0, 180)
     });
 
+    if (detectionCategory === "broadcaster") {
+      scheduleBroadcasterAvatarHydration(key, username);
+    }
+
     scheduleSuspiciousUsersReport(350);
   }
 
-  function runAlertAction(key, username, action = getAlertAction()) {
-    if (action === "notify" || action === "off") return;
+  function scheduleBroadcasterAvatarHydration(key, username) {
+    if (!key) return;
+
+    const cached = broadcasterAvatarCache.get(key);
+    if (typeof cached === "string" && cached) {
+      const current = suspiciousUsers.get(key);
+      if (current && current.avatarUrl !== cached) {
+        current.avatarUrl = cached;
+        scheduleSuspiciousUsersReport(120);
+      }
+      return;
+    }
+
+    if (cached === null) return;
+
+    fetchBroadcasterAvatar(username).then((url) => {
+      if (!url) return;
+      const current = suspiciousUsers.get(key);
+      if (!current) return;
+      if (getDetectionCategory(current.reasons || []) !== "broadcaster") return;
+      if (current.avatarUrl === url) return;
+      current.avatarUrl = url;
+      scheduleSuspiciousUsersReport(120);
+    }).catch(() => {
+      // Keep existing detection entry even if avatar fetching fails.
+    });
+  }
+
+  function runAlertAction(key, username, action = getAlertAction(), reasons = []) {
+    if (action === "off") return;
+
+    if (action === "notify") {
+      if (notifiedUsers.has(key)) return;
+      notifiedUsers.add(key);
+      const reasonLabel = Array.isArray(reasons) && reasons.length
+        ? reasons.join(" / ")
+        : "検出";
+      chrome.runtime.sendMessage({
+        type: "KLT_SHOW_NOTIFICATION",
+        username: String(username),
+        channelSlug: activeChannelSlug || getChannelSlug() || "",
+        reasonLabel
+      });
+      return;
+    }
+
     if (pinnedCards.has(key) || autoPinnedUsers.has(key) || autoPinDismissedUsers.has(key)) return;
 
     if (action === "auto-pin") {
@@ -1709,13 +2062,23 @@
   }
 
   function getDetectionIcon(reasons) {
-    const values = Array.isArray(reasons) ? reasons : [];
-    if (values.some((reason) => /殺害|危害|暴力|脅迫/.test(reason))) return "🔪";
-    if (values.some((reason) => /個人情報|住所|電話番号|メール/.test(reason))) return "👤";
-    if (values.some((reason) => /ウォッチリスト/.test(reason))) return "★";
-    if (values.some((reason) => /配信者リスト/.test(reason))) return "K";
-    if (values.length) return "🤖";
+    const category = getDetectionCategory(reasons);
+    if (category === "threat") return "🔪";
+    if (category === "privacy") return "👤";
+    if (category === "watch") return "★";
+    if (category === "broadcaster") return "📺";
+    if (category === "bot") return "🤖";
     return "💀";
+  }
+
+  function getDetectionCategory(reasons) {
+    const values = Array.isArray(reasons) ? reasons : [];
+    if (values.some((reason) => /殺害|危害|暴力|脅迫/.test(reason))) return "threat";
+    if (values.some((reason) => /個人情報|住所|電話番号|メール/.test(reason))) return "privacy";
+    if (values.some((reason) => /ウォッチリスト/.test(reason))) return "watch";
+    if (values.some((reason) => /配信者リスト/.test(reason))) return "broadcaster";
+    if (values.length) return "bot";
+    return "default";
   }
 
   function getSuspiciousUserList() {
@@ -1842,6 +2205,118 @@
     } catch (_error) {
       // Runtime messaging is optional for unpacked reloads.
     }
+  }
+
+  function installRealtimeWsBridge() {
+    window.addEventListener("message", handleRealtimeWsBridgeMessage);
+    requestRealtimeWsBuffer();
+  }
+
+  function requestRealtimeWsBuffer() {
+    try {
+      window.postMessage({
+        source: "KLT_CONTENT_BRIDGE",
+        type: "KLT_REQUEST_WS_BUFFER"
+      }, location.origin);
+    } catch (_error) {
+      // The bridge is optional; DOM fallback remains available.
+    }
+  }
+
+  function handleRealtimeWsBridgeMessage(event) {
+    if (event.source !== window || event.origin !== location.origin) return;
+    const data = event.data;
+    if (!data || data.source !== "KLT_WS_BRIDGE") return;
+
+    if (data.type === "KLT_WS_BUFFER" && Array.isArray(data.payload)) {
+      for (const payload of data.payload) {
+        rememberRealtimeWsMessage(payload);
+      }
+      return;
+    }
+
+    if (data.type === "KLT_WS_CHAT_MESSAGE") {
+      rememberRealtimeWsMessage(data.payload);
+    }
+  }
+
+  function rememberRealtimeWsMessage(payload) {
+    if (!payload || typeof payload !== "object") return false;
+
+    realtimeWsMessagesSeen += 1;
+    const username = cleanText(payload.username || payload.sender?.username || payload.sender?.slug).replace(/^@/, "");
+    const text = getRealtimeWsMessageText(payload);
+    const timestamp = parseKickDate(payload.createdAt || payload.created_at || payload.sentAt || payload.timestamp) || Date.now();
+    const messageId = String(
+      payload.msgId ||
+      payload.id ||
+      payload.messageId ||
+      payload.message_id ||
+      payload.uuid ||
+      (payload.kltSeq ? `klt-ws-${payload.kltSeq}` : "")
+    );
+    if (!username || !text) return false;
+
+    lastRealtimeWsMessageAt = Date.now();
+    const remembered = rememberMessage(username, text, timestamp, messageId, "realtime-ws", "posted");
+    if (remembered) {
+      realtimeWsMessagesAccepted += 1;
+      clearBackfillNoResultState(username);
+    }
+
+    return remembered;
+  }
+
+  function getRealtimeWsMessageText(payload) {
+    const contentText = stringifyApiContent(
+      payload.content ??
+      payload.message ??
+      payload.text ??
+      payload.body ??
+      ""
+    );
+    const emoteText = stringifyRealtimeWsEmotes(payload.emotes);
+    return normalizeMessageContent(contentText || emoteText);
+  }
+
+  function stringifyRealtimeWsEmotes(value) {
+    const emotes = Array.isArray(value) ? value : value ? [value] : [];
+    return emotes
+      .map((emote) => {
+        const id = cleanText(
+          emote?.id ||
+          emote?.emote_id ||
+          emote?.emoteId ||
+          emote?.kick_id ||
+          ""
+        );
+        const name = cleanText(
+          emote?.name ||
+          emote?.slug ||
+          emote?.code ||
+          emote?.text ||
+          emote?.label ||
+          ""
+        );
+        if (id && name) return `[emote:${id}:${name}]`;
+        return normalizeEmoteLabel(name) || EMOTE_PLACEHOLDER;
+      })
+      .filter(Boolean)
+      .join(" ");
+  }
+
+  function clearBackfillNoResultState(username) {
+    const key = normalizeUsername(username);
+    const state = userBackfillState.get(key);
+    if (!state?.reason && !state?.failed) return;
+
+    userBackfillState.set(key, {
+      loading: false,
+      failed: false,
+      done: false,
+      reason: "",
+      lastAttemptAt: state.lastAttemptAt || 0
+    });
   }
 
   function getVisibleFollowingUsernames() {
@@ -1997,9 +2472,10 @@
   }
 
   // Auto-scroll helper: scrolls a following-list root to load items and collects usernames
-  const FOLLOWED_CHANNELS_AUTO_SCROLL_MS = 900;
-  const FOLLOWED_CHANNELS_SCROLL_STEPS = 8;
-  const FOLLOWED_CHANNELS_SCROLL_STEP_PX = 800;
+  // Increased defaults for larger lists: longer wait and more scroll attempts.
+  const FOLLOWED_CHANNELS_AUTO_SCROLL_MS = 1200; // wait between scrolls
+  const FOLLOWED_CHANNELS_SCROLL_STEPS = 20; // number of full-scroll attempts
+  const FOLLOWED_CHANNELS_SCROLL_STEP_PX = 1200; // incremental small scroll to trigger lazy loading
 
   function delay(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -2039,7 +2515,18 @@
 
       // try a small incremental scroll to trigger lazy load
       try { root.scrollBy(0, FOLLOWED_CHANNELS_SCROLL_STEP_PX); } catch (_e) { try { window.scrollBy(0, FOLLOWED_CHANNELS_SCROLL_STEP_PX); } catch (_e2) {} }
-      await delay(FOLLOWED_CHANNELS_AUTO_SCROLL_MS / 2);
+      await delay(Math.round(FOLLOWED_CHANNELS_AUTO_SCROLL_MS / 2));
+      collectFromRoot();
+      if (seen.size > lastSize) {
+        lastSize = seen.size;
+        continue;
+      }
+
+      // as a last attempt, perform a short up-and-down jitter to encourage lazy loading
+      try { root.scrollTop = Math.max(0, root.scrollTop - 200); } catch (_e) {}
+      await delay(200);
+      try { root.scrollTop = root.scrollHeight; } catch (_e) {}
+      await delay(300);
       collectFromRoot();
       if (seen.size > lastSize) {
         lastSize = seen.size;
@@ -2111,7 +2598,8 @@
       await updateFollowedChannelsSyncStatus("success", "", {
         addedCount: result.addedCount,
         listCount: result.listCount,
-        totalCount: apiResult.totalCount || visibleUsernames.length || 0,
+        // Ensure totalCount is never less than the merged list count to avoid display inconsistencies
+        totalCount: Math.max(Number(apiResult.totalCount) || 0, visibleUsernames.length || 0, result.listCount || 0),
         source: (Array.isArray(apiResult.usernames) && apiResult.usernames.length) ? apiResult.source || "Kick API" : "表示中のフォロー中欄"
       });
     } finally {
@@ -2129,52 +2617,20 @@
       return { usernames: [], reason: "現在KICKにログインされていません。", loginRequired: true, source: "" };
     }
 
-    const probe = await racePromise(fetchFollowedChannelsTotalProbe(), 5000);
-    const totalCount = probe && typeof probe.totalCount === "number" ? probe.totalCount : 0;
-
-    if (totalCount < 1) {
-      const loginRequired = probe?.loginRequired === true;
+    const result = await racePromise(fetchFollowedChannelsViaPageContext(), 30000);
+    if (result && result.usernames && result.usernames.length) {
       return {
-        usernames: [],
-        reason: loginRequired ? "現在KICKにログインされていません。" : "フォロー中チャンネルの合計数が取得できませんでした。",
-        loginRequired,
-        source: ""
+        usernames: result.usernames,
+        totalCount: result.totalCount || result.usernames.length,
+        reason: "",
+        loginRequired: false,
+        source: result.source || "kick-api-v2"
       };
     }
 
-    const pageResult = await racePromise(fetchFollowedChannelsViaPageContext(), 10000);
-    if (pageResult && pageResult.usernames.length) {
-      return { ...pageResult, totalCount };
-    }
-
-    return { usernames: [], reason: "フォロー中チャンネルが見つかりませんでした。", loginRequired: false, source: "" };
-  }
-
-  async function fetchFollowedChannelsTotalProbe() {
-    try {
-      const resp = await sendRuntimeMessage({ type: "KLT_EXECUTE_PAGE_FETCH", path: "/api/v2/channels/followed?per_page=1" });
-      const r = resp?.result || null;
-      if (r && r.json) {
-        const tc = Number(r.json.total) || Number(r.json.count) || Number(r.json.pagination?.total) || 0;
-        if (tc) return { totalCount: tc, loginRequired: false };
-      }
-
-      // fallback to v1
-      const resp2 = await sendRuntimeMessage({ type: "KLT_EXECUTE_PAGE_FETCH", path: "/api/v1/channels/followed?per_page=1" });
-      const r2 = resp2?.result || null;
-      if (r2 && r2.json) {
-        const tc2 = Number(r2.json.total) || Number(r2.json.count) || Number(r2.json.pagination?.total) || 0;
-        if (tc2) return { totalCount: tc2, loginRequired: false };
-      }
-
-      if (r2 && (r2.status === 401 || r2.status === 403)) {
-        return { totalCount: 0, loginRequired: true };
-      }
-
-      return { totalCount: 0, loginRequired: false };
-    } catch (_e) {
-      return { totalCount: 0, loginRequired: false };
-    }
+    const reason = result?.reason || "フォロー中チャンネルが見つかりませんでした。";
+    const loginRequired = result?.loginRequired === true;
+    return { usernames: [], reason, loginRequired, source: "" };
   }
 
   function racePromise(promise, ms) {
@@ -2185,24 +2641,73 @@
   }
 
   async function fetchFollowedChannelsViaPageContext() {
+    const token = getSessionTokenFromCookie();
+    if (!token) {
+      const loginLink = document.querySelector('a[href*="/login"]');
+      const needsLogin = !!(loginLink && loginLink.offsetParent !== null);
+      return { usernames: [], reason: needsLogin ? "ログインが必要です" : "session_tokenが見つかりません", loginRequired: needsLogin };
+    }
+
+    const usernames = [];
+    const seen = new Set();
+    let cursor = 0;
+
     try {
-      const resp = await sendRuntimeMessage({ type: "KLT_EXECUTE_PAGE_FETCH", path: "/api/v2/channels/followed?per_page=100" });
-      const r = resp?.result || null;
-      if (r && r.json) {
-        const usernames = extractFollowedChannelUsernames(r.json);
-        return { usernames, reason: usernames.length ? "" : "", loginRequired: false, source: "kick-api-v2", raw: r.json };
+      while (true) {
+        const url = `${API_ORIGIN}/api/v2/channels/followed-page?cursor=${cursor}`;
+        const resp = await fetch(url, {
+          headers: {
+            "Authorization": `Bearer ${token}`,
+            "Accept": "application/json",
+            "x-app-platform": "web"
+          },
+          credentials: "include"
+        });
+
+        if (!resp.ok) {
+          if (resp.status === 401 || resp.status === 403) {
+            return { usernames: [], reason: "ログインが必要です", loginRequired: true };
+          }
+          return { usernames: [], reason: `API error: ${resp.status}`, loginRequired: false };
+        }
+
+        const data = await resp.json();
+        const channels = data.channels || [];
+
+        for (const ch of channels) {
+          const slug = ch.channel_slug || ch.slug || ch.username || "";
+          if (slug && /^[a-z0-9_.-]{1,32}$/i.test(slug)) {
+            const normalized = slug.replace(/^@/, "").trim().toLowerCase();
+            if (!seen.has(normalized)) {
+              seen.add(normalized);
+              usernames.push(normalized);
+            }
+          }
+        }
+
+        if (!data.nextCursor || channels.length === 0) break;
+        cursor = data.nextCursor;
       }
 
-      const resp2 = await sendRuntimeMessage({ type: "KLT_EXECUTE_PAGE_FETCH", path: "/api/v1/channels/followed?per_page=100" });
-      const r2 = resp2?.result || null;
-      if (r2 && r2.json) {
-        const usernames = extractFollowedChannelUsernames(r2.json);
-        return { usernames, reason: usernames.length ? "" : "", loginRequired: false, source: "kick-api-v1", raw: r2.json };
-      }
+      return {
+        usernames,
+        totalCount: usernames.length,
+        reason: "",
+        loginRequired: false,
+        source: "kick-api-v2"
+      };
+    } catch (err) {
+      return { usernames: [], reason: `通信エラー: ${err.message}`, loginRequired: false };
+    }
+  }
 
-      return null;
+  function getSessionTokenFromCookie() {
+    try {
+      const match = document.cookie.match(/(?:^|;\s*)session_token=([^;]*)/);
+      if (!match) return "";
+      return decodeURIComponent(match[1]);
     } catch (_e) {
-      return null;
+      return "";
     }
   }
 
@@ -2635,6 +3140,37 @@
     }).format(new Date(timestamp));
   }
 
+  async function fetchBroadcasterAvatar(username) {
+    const key = normalizeUsername(username);
+    if (broadcasterAvatarCache.has(key)) return broadcasterAvatarCache.get(key);
+    try {
+      const res = await fetch(`https://kick.com/api/v2/channels/${encodeURIComponent(key)}`, {
+        credentials: "include",
+        headers: { Accept: "application/json", "x-app-platform": "web" }
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      const url = data?.user?.profile_pic || data?.user?.profile_image || null;
+      broadcasterAvatarCache.set(key, url);
+      return url;
+    } catch (_e) {
+      broadcasterAvatarCache.set(key, null);
+      return null;
+    }
+  }
+
+  function renderMessageWithEmotes(text) {
+    if (!text) return "";
+    const escaped = text
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+    return escaped.replace(/\[emote:(\d+):([^\]]+)\]/g, (_, id, name) => {
+      return `<img class="kch-emote" src="https://files.kick.com/emotes/${id}/fullsize" alt="${name}" title="${name}" loading="lazy">`;
+    });
+  }
+
   function renderMessageTime(meta, message) {
     if (getMessageTimestampKind(message) === "posted") {
       meta.textContent = formatTime(message.timestamp);
@@ -2667,28 +3203,27 @@
       .filter((message) => message.text || message.rawText);
 
     if (riskMessages.length < 2) {
-      return {
-        suspicious: false,
-        reasons: []
-      };
+      return createEmptyRiskResult();
     }
 
+    let score = 0;
     const reasons = [];
     const sorted = dedupeRiskMessages(riskMessages).sort((a, b) => b.timestamp - a.timestamp);
     if (sorted.length < 2) {
-      return {
-        suspicious: false,
-        reasons: []
-      };
+      return createEmptyRiskResult();
     }
     const newest = sorted[0]?.timestamp || 0;
+    const recent30s = sorted.filter((message) => newest - message.timestamp <= 30000);
     const recent60s = sorted.filter((message) => newest - message.timestamp <= 60000);
-    const recent120s = sorted.filter((message) => newest - message.timestamp <= 120000);
+    const addRule = (reason, weight) => {
+      reasons.push(reason);
+      score += weight;
+    };
 
-    if (recent60s.length >= 5) {
-      reasons.push("60秒以内に5件以上");
-    } else if (recent120s.length >= 8) {
-      reasons.push("120秒以内に8件以上");
+    if (recent30s.length >= 8) {
+      addRule("30秒以内に8件以上", 18);
+    } else if (recent60s.length >= 12) {
+      addRule("60秒以内に12件以上", 14);
     }
 
     const counts = new Map();
@@ -2697,11 +3232,11 @@
     }
 
     if ([...counts.values()].some((count) => count >= 3)) {
-      reasons.push("同一コメントを3回以上");
+      addRule("同一コメントを3回以上", 22);
     }
 
     if (![...counts.values()].some((count) => count >= 3) && hasRepeatedLongComment(counts)) {
-      reasons.push("同一長文コメントを2回以上");
+      addRule("同一長文コメントを2回以上", 14);
     }
 
     const intervals = [];
@@ -2710,48 +3245,73 @@
     }
 
     if (hasBurstWindow(sorted, 3, 2000)) {
-      reasons.push("2秒以内に3コメント以上");
+      addRule("2秒以内に3コメント以上", 32);
     }
 
     if (hasBurstWindow(sorted, 5, 10000)) {
-      reasons.push("10秒以内に5コメント以上");
+      addRule("10秒以内に5コメント以上", 16);
     }
 
     const averageInterval = intervals.reduce((total, value) => total + value, 0) / Math.max(intervals.length, 1);
-    if (sorted.length >= 6 && averageInterval > 0 && averageInterval <= 8000) {
-      reasons.push("平均投稿間隔が8秒以下");
+    if (sorted.length >= 10 && averageInterval > 0 && averageInterval <= 5000) {
+      addRule("平均投稿間隔が5秒以下", 12);
     }
 
     const urlLikeCount = sorted.filter((message) => /https?:\/\/|www\.|\.com\b|\.net\b|\.org\b/i.test(message.text)).length;
     if (urlLikeCount >= 3) {
-      reasons.push("URL風コメントが多い");
+      addRule("URL風コメントが多い", 15);
     }
 
     const massRepeatCount = sorted.filter((message) => hasMassRepeatedText(message.rawText)).length;
     const strongMassRepeat = sorted.some((message) => hasMassRepeatedText(message.rawText) && cleanText(message.rawText).length >= MASS_REPEAT_STRONG_LENGTH);
     if (massRepeatCount >= 2 || strongMassRepeat) {
-      reasons.push("長文/語句の大量反復");
+      addRule("長文/語句の大量反復", 12);
     }
 
     const emoteSpamCount = sorted.filter((message) => isEmoteSpamText(message.rawText)).length;
     const strongEmoteSpam = sorted.some((message) => countEmoteLikeTokens(message.rawText) >= EMOTE_SPAM_STRONG_COUNT);
     if (emoteSpamCount >= 2 || strongEmoteSpam) {
-      reasons.push("絵文字/スタンプ大量");
+      addRule("絵文字/スタンプ大量", 10);
+    }
+
+    const internalRepetitionStats = sorted.map((message) => analyzeInternalRepetition(message.rawText));
+    const strongInternalRepetitionCount = internalRepetitionStats.filter((value) => value.strong).length;
+    const moderateInternalRepetitionCount = internalRepetitionStats.filter((value) => value.moderate).length;
+    if (strongInternalRepetitionCount >= 1) {
+      addRule("単一コメント内の大量反復", 40);
+    } else if (moderateInternalRepetitionCount >= 2) {
+      addRule("コメント内の反復が多い", 16);
     }
 
     const personalInfoCount = sorted.filter((message) => looksLikePersonalInfoPost(message.rawText)).length;
-    if (personalInfoCount >= 2) {
-      reasons.push("個人情報らしき投稿の連投");
+    if (personalInfoCount >= 1) {
+      addRule("個人情報らしき投稿", 45);
     }
 
     const violentThreatCount = sorted.filter((message) => looksLikeViolentThreatPost(message.rawText)).length;
-    if (violentThreatCount >= 2) {
-      reasons.push("殺害/危害予告らしき投稿の連投");
+    if (violentThreatCount >= 1) {
+      addRule("殺害/危害予告らしき投稿", 55);
     }
 
+    const isCritical = personalInfoCount >= 1 || violentThreatCount >= 1 || strongInternalRepetitionCount >= 1;
+    const matchedRules = reasons.length;
+    score = Math.min(100, score);
     return {
-      suspicious: reasons.length >= 2,
-      reasons
+      suspicious: isCritical || (matchedRules >= BOT_RULE_MATCH_THRESHOLD && score >= BOT_SCORE_THRESHOLD),
+      reasons,
+      score,
+      matchedRules,
+      critical: isCritical
+    };
+  }
+
+  function createEmptyRiskResult() {
+    return {
+      suspicious: false,
+      reasons: [],
+      score: 0,
+      matchedRules: 0,
+      critical: false
     };
   }
 
@@ -2784,11 +3344,11 @@
   function looksLikePersonalInfoPost(text) {
     const value = cleanText(text);
     if (!value) return false;
-    if (/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(value)) return true;
-    if (/0\d{1,4}[-ー−\s]?\d{1,4}[-ー−\s]?\d{3,4}/.test(value)) return true;
-    if (/〒?\s*\d{3}[-ー−]?\d{4}/.test(value)) return true;
-    if (/(北海道|東京都|京都府|大阪府|.{2,3}県).{2,24}(市|区|町|村).{0,30}(\d|丁目|番地|号|マンション|アパート|荘|ハイツ)/.test(value)) return true;
-    return /(住所|本名|電話番号|メアド|メールアドレス|最寄り駅|実家).{0,24}[:：]/.test(value);
+    const hasPhone = /0\d{1,4}[-ー−]\d{1,4}[-ー−]\d{3,4}/.test(value);
+    const hasName = /(氏名|名前|本名|フルネーム).{0,10}[:：は]/.test(value);
+    if (hasPhone && hasName) return true;
+    if (/(北海道|東京都|京都府|大阪府|.{2,3}県).{2,20}(市|区|町|村).{1,20}(\d+丁目|\d+番地|\d+番\d+号)/.test(value)) return true;
+    return /(住所|電話番号|本名).{0,10}[:：].{3,}/.test(value);
   }
 
   function looksLikeViolentThreatPost(text) {
@@ -2819,6 +3379,50 @@
     }
 
     return false;
+  }
+
+  function analyzeInternalRepetition(text) {
+    const compact = cleanText(text).replace(/\s+/g, "");
+    if (compact.length < MASS_REPEAT_MIN_LENGTH) {
+      return {
+        moderate: false,
+        strong: false,
+        ratio: 0,
+        maxOccurrences: 1
+      };
+    }
+
+    let bestCoverage = 0;
+    let maxOccurrences = 1;
+    const maxPhraseLength = Math.min(24, Math.floor(compact.length / 2));
+    const maxStart = Math.max(1, Math.min(64, compact.length - 4));
+
+    for (let start = 0; start < maxStart; start += 1) {
+      for (let length = 4; length <= maxPhraseLength; length += 1) {
+        if (start + length > compact.length) break;
+        const phrase = compact.slice(start, start + length);
+        if (!phrase.trim()) continue;
+        if (/^(.)\1+$/u.test(phrase)) continue;
+
+        const count = countNonOverlappingOccurrences(compact, phrase);
+        if (count < 3) continue;
+
+        const coverage = phrase.length * count;
+        if (coverage > bestCoverage) bestCoverage = coverage;
+        if (count > maxOccurrences) maxOccurrences = count;
+      }
+    }
+
+    const ratio = compact.length > 0 ? bestCoverage / compact.length : 0;
+    const strong = ratio >= 0.68 || (maxOccurrences >= 4 && bestCoverage >= Math.min(120, Math.floor(compact.length * 0.6)));
+    const moderate = !strong && ratio >= 0.48 && maxOccurrences >= 3;
+
+    return {
+      moderate,
+      strong,
+      ratio,
+      maxOccurrences
+    };
   }
 
   function countNonOverlappingOccurrences(text, phrase) {
@@ -2945,7 +3549,6 @@
     if (!sameHoverTarget) {
       renderPopover(user.username, activeAnchor);
     }
-    backfillUserHistory(user.username);
   }
 
   document.addEventListener("mouseover", (event) => {
@@ -2992,6 +3595,7 @@
 
   window.addEventListener("scroll", (event) => {
     if (!activeRow) return;
+    if (isTemporaryPopoverActive) return;
     if (shouldIgnoreScrollForHoverPopover(event.target)) return;
     hidePopover();
   }, true);
@@ -3016,7 +3620,7 @@
     for (const [key, card] of pinnedCards.entries()) {
       setElementPosition(card.element, card.position.left, card.position.top, key);
     }
-    hidePopover();
+    if (!isTemporaryPopoverActive) hidePopover();
   });
 
   popover.addEventListener("click", (event) => {
@@ -3056,9 +3660,23 @@
   });
 
   const observer = new MutationObserver((mutations) => {
+    if (shouldPreferRealtimeWsIngestion()) {
+      noteSkipReason("mutation_scan_skipped:ws_active", 1500);
+      return;
+    }
+
     const rows = new Set();
 
     for (const mutation of mutations) {
+      if (mutation.type === "characterData") {
+        const el = mutation.target?.parentElement;
+        if (el && isInsideChatArea(el)) {
+          const row = findLikelyRowFromUsername(el) || el.closest("[data-index]");
+          if (row) rows.add(row);
+        }
+        continue;
+      }
+
       for (const node of mutation.addedNodes) {
         if (node.nodeType !== Node.ELEMENT_NODE) continue;
         if (!isInsideChatArea(node) && !isLikelyChatContainer(node)) continue;
@@ -3093,7 +3711,9 @@
 
   observer.observe(document.documentElement, {
     childList: true,
-    subtree: true
+    subtree: true,
+    characterData: true,
+    characterDataOldValue: false
   });
 
   function scheduleSave() {
@@ -3202,7 +3822,7 @@
         return userSettings.broadcasterListEnabled && getAlertAction() !== "off";
       }
 
-      return getAlertAction() !== "off";
+      return getAlertAction() !== "off" && userSettings.botDetectionEnabled !== false;
     });
   }
 
@@ -3272,13 +3892,17 @@
     apiWindowCache.clear();
     userBackfillState.clear();
     pendingTimestampCorrections.clear();
+    coordinatedSpamBuckets.clear();
     lastUserAnchors.clear();
+    suspiciousEvalAt.clear();
     pinnedApiCheckingUsers.clear();
     autoPinnedUsers.clear();
     autoPinDismissedUsers.clear();
+    notifiedUsers.clear();
     suspiciousUsers.clear();
     clearTimeout(suspiciousReportTimer);
     suspiciousReportTimer = 0;
+    resetDiagnostics();
     sendSuspiciousUsersReset();
     pinnedApiChecking = false;
     timestampCorrectionRunning = false;
@@ -3427,7 +4051,10 @@
 
       apiDebug.timestampCorrectionAttempts += 1;
       for (const windowStart of [...windows].sort((a, b) => a - b)) {
-        await fetchChatWindow(windowStart, { force: true });
+        await fetchChatWindow(windowStart, {
+          force: true,
+          targetKeys: candidates.map((candidate) => normalizeUsername(candidate.username))
+        });
       }
     } catch (_error) {
       apiDebug.lastSkippedReason = "投稿時刻補正エラー";
@@ -3472,6 +4099,35 @@
   async function backfillUserHistory(username) {
     const key = normalizeUsername(username);
     if (!key) return;
+    if (!pinnedCards.has(key)) return;
+
+    const realtimeBaseline = getUserRealtimeBaselineTimestamp(key);
+    if (!realtimeBaseline) {
+      const state = userBackfillState.get(key) || {};
+      userBackfillState.set(key, {
+        loading: false,
+        failed: false,
+        done: false,
+        reason: "リアルタイムコメント待ち",
+        lastAttemptAt: state.lastAttemptAt || 0
+      });
+      refreshActivePopover(key);
+      return;
+    }
+
+    const existingApiBackfillCount = countUserApiMessagesBefore(key, realtimeBaseline);
+    if (existingApiBackfillCount >= MAX_API_BACKFILL_MESSAGES) {
+      const state = userBackfillState.get(key) || {};
+      userBackfillState.set(key, {
+        loading: false,
+        failed: false,
+        done: true,
+        reason: "",
+        lastAttemptAt: state.lastAttemptAt || 0
+      });
+      refreshActivePopover(key);
+      return;
+    }
 
     if (!streamContext?.channelId || !streamContext?.startedAt) {
       await initializeStreamContext();
@@ -3494,29 +4150,34 @@
     const now = Date.now();
     if (currentState?.loading) return;
     if (currentState?.done) return;
-    if (currentState?.failed && now - (currentState.lastAttemptAt || 0) < BACKFILL_RETRY_MS) return;
+    if (currentState?.lastAttemptAt && now - currentState.lastAttemptAt < BACKFILL_RETRY_MS) return;
 
     userBackfillState.set(key, {
       loading: true,
       failed: false,
       done: false,
       reason: "",
-      lastAttemptAt: now
+      lastAttemptAt: now,
+      baselineTimestamp: realtimeBaseline
     });
     refreshActivePopover(key);
 
     try {
-      const beforeCount = userHistory.get(key)?.messages?.length || 0;
-      const result = await fetchUserWindows(username);
-      const messages = userHistory.get(key)?.messages || [];
-      const addedCount = Math.max(0, messages.length - beforeCount);
-      const done = result.exhausted || (messages.length >= MAX_MESSAGES && result.foundOlderThanBaseline);
+      const beforeApiCount = countUserApiMessagesBefore(key, realtimeBaseline);
+      const result = await fetchUserWindows(username, {
+        beforeTimestamp: realtimeBaseline,
+        maxApiMessages: MAX_API_BACKFILL_MESSAGES
+      });
+      const afterApiCount = countUserApiMessagesBefore(key, realtimeBaseline);
+      const addedCount = Math.max(0, afterApiCount - beforeApiCount);
+      const done = afterApiCount >= MAX_API_BACKFILL_MESSAGES || result.exhausted;
       userBackfillState.set(key, {
         loading: false,
         failed: false,
         done,
-        reason: addedCount || result.foundOlderThanBaseline ? "" : "API内に該当コメントなし",
-        lastAttemptAt: Date.now()
+        reason: addedCount ? "" : done ? "API内に該当コメントなし" : "",
+        lastAttemptAt: Date.now(),
+        baselineTimestamp: realtimeBaseline
       });
     } catch (_error) {
       userBackfillState.set(key, {
@@ -3524,40 +4185,51 @@
         failed: true,
         done: false,
         reason: "APIエラー",
-        lastAttemptAt: Date.now()
+        lastAttemptAt: Date.now(),
+        baselineTimestamp: realtimeBaseline
       });
     }
 
     refreshActivePopover(key);
   }
 
-  async function fetchUserWindows(username) {
+  async function fetchUserWindows(username, options = {}) {
     const key = normalizeUsername(username);
+    const beforeTimestamp = Number(options.beforeTimestamp) > 0 ? Number(options.beforeTimestamp) : 0;
+    if (!beforeTimestamp) {
+      return {
+        exhausted: true
+      };
+    }
+
+    const maxApiMessages = Math.max(1, Number(options.maxApiMessages) || MAX_API_BACKFILL_MESSAGES);
+    if (countUserApiMessagesBefore(key, beforeTimestamp) >= maxApiMessages) {
+      return {
+        exhausted: false
+      };
+    }
+
     const now = Date.now();
     const streamStart = streamContext.startedAt;
-    const baselineOldest = getOldestUserTimestamp(key) || now;
-    let foundOlderThanBaseline = false;
-    const windows = getBackfillWindowStarts(now, streamStart);
+    const windows = getBackfillWindowStarts(Math.min(now, beforeTimestamp), streamStart);
 
     for (let index = 0; index < windows.length; index += 1) {
       const windowStart = windows[index];
-      const apiMessages = await fetchChatWindow(windowStart, { force: index < PINNED_API_LOOKBACK_WINDOWS });
-      if (hasOlderApiMessageForUser(apiMessages, key, baselineOldest)) {
-        foundOlderThanBaseline = true;
-      }
+      await fetchChatWindow(windowStart, {
+        force: index < PINNED_API_LOOKBACK_WINDOWS,
+        targetKeys: [key],
+        beforeTimestamp
+      });
 
-      const messages = userHistory.get(key)?.messages || [];
-      if (messages.length >= MAX_MESSAGES && foundOlderThanBaseline) {
+      if (countUserApiMessagesBefore(key, beforeTimestamp) >= maxApiMessages) {
         return {
-          exhausted: false,
-          foundOlderThanBaseline
+          exhausted: false
         };
       }
     }
 
     return {
-      exhausted: true,
-      foundOlderThanBaseline
+      exhausted: true
     };
   }
 
@@ -3581,18 +4253,34 @@
       .sort((a, b) => b - a);
   }
 
-  function getOldestUserTimestamp(key) {
+  function getUserRealtimeBaselineTimestamp(key) {
     const messages = userHistory.get(key)?.messages || [];
-    if (!messages.length) return 0;
-    return Math.min(...messages.map((message) => message.timestamp || Date.now()));
+    const postedNonApi = messages
+      .filter((message) => message?.source !== "api")
+      .filter((message) => getMessageTimestampKind(message) === "posted")
+      .map((message) => Number(message.timestamp) || 0)
+      .filter((timestamp) => timestamp > 0);
+    if (!postedNonApi.length) return 0;
+    return Math.min(...postedNonApi);
   }
 
-  function hasOlderApiMessageForUser(messages, key, baselineOldest) {
-    return messages.some((message) => {
-      if (normalizeUsername(getApiMessageUsername(message)) !== key) return false;
-      const timestamp = getApiMessageTimestamp(message);
-      return timestamp && timestamp < baselineOldest - 1000;
-    });
+  function countUserApiMessagesBefore(key, beforeTimestamp) {
+    if (!beforeTimestamp) return 0;
+    const messages = userHistory.get(key)?.messages || [];
+    return messages.filter((message) => {
+      return message?.source === "api" &&
+        Number(message.timestamp) > 0 &&
+        message.timestamp < beforeTimestamp - 1000;
+    }).length;
+  }
+
+  function needsUserApiBackfill(key) {
+    if (!pinnedCards.has(key)) return false;
+    const state = userBackfillState.get(key);
+    if (state?.done) return false;
+    const baseline = getUserRealtimeBaselineTimestamp(key);
+    if (!baseline) return false;
+    return countUserApiMessagesBefore(key, baseline) < MAX_API_BACKFILL_MESSAGES;
   }
 
   function updatePinnedApiRefresh() {
@@ -3612,46 +4300,32 @@
 
   async function fetchPinnedApiUpdates() {
     if (!pinnedCards.size || pinnedApiChecking) return;
-
-    if (!isChatPaused()) {
-      if (pinnedApiCheckingUsers.size) {
+    const targets = [...pinnedCards.keys()].filter((key) => needsUserApiBackfill(key));
+    if (!targets.length) {
+      if (pinnedApiCheckingUsers.size || pinnedApiChecking) {
         pinnedApiCheckingUsers.clear();
         pinnedApiChecking = false;
         refreshAllPopovers();
       }
-      apiDebug.lastSkippedReason = "固定API確認: チャット一時停止なし";
-      return;
-    }
-
-    if (!streamContext?.channelId || !streamContext?.startedAt) {
-      await initializeStreamContext();
-    }
-
-    if (!streamContext?.channelId || !streamContext?.startedAt) {
-      apiDebug.lastSkippedReason = "固定API確認: 配信情報なし";
+      apiDebug.lastSkippedReason = "固定API補完: 不要";
+      noteSkipReason("api_backfill_skipped:not_needed", 3000);
       return;
     }
 
     pinnedApiChecking = true;
     pinnedApiCheckingUsers.clear();
-    for (const key of pinnedCards.keys()) {
+    for (const key of targets) {
       pinnedApiCheckingUsers.add(key);
     }
     refreshAllPopovers();
 
     try {
-      const now = Date.now();
-      const windows = new Set();
-      for (let index = 0; index < PINNED_API_LOOKBACK_WINDOWS; index += 1) {
-        const start = Math.max(streamContext.startedAt, now - (index * API_WINDOW_MS));
-        windows.add(Math.floor(start / API_WINDOW_MS) * API_WINDOW_MS);
-      }
-
-      for (const windowStart of [...windows].sort((a, b) => a - b)) {
-        await fetchChatWindow(windowStart, { force: true });
+      for (const key of targets) {
+        const username = userHistory.get(key)?.displayName || key;
+        await backfillUserHistory(username);
       }
     } catch (_error) {
-      apiDebug.lastSkippedReason = "固定API確認エラー";
+      apiDebug.lastSkippedReason = "固定API補完エラー";
     } finally {
       pinnedApiChecking = false;
       pinnedApiCheckingUsers.clear();
@@ -3662,7 +4336,13 @@
   async function fetchChatWindow(windowStart, options = {}) {
     const roundedStart = Math.floor(windowStart / API_WINDOW_MS) * API_WINDOW_MS;
     const cacheKey = `${streamContext.channelId}:${roundedStart}`;
-    if (!options.force && apiWindowCache.has(cacheKey)) return [];
+    const targetKeys = normalizeTargetKeySet(options.targetKeys || options.targetKey);
+    const beforeTimestamp = Number(options.beforeTimestamp) > 0 ? Number(options.beforeTimestamp) : 0;
+    if (!options.force && apiWindowCache.has(cacheKey)) {
+      const cachedMessages = apiWindowCache.get(cacheKey) || [];
+      apiDebug.lastAcceptedMessageCount = rememberApiMessages(cachedMessages, targetKeys, { beforeTimestamp });
+      return cachedMessages;
+    }
 
     const startTime = formatKickApiTime(roundedStart);
     const url = `${API_ORIGIN}/api/v2/channels/${encodeURIComponent(streamContext.channelId)}/messages?start_time=${encodeURIComponent(startTime)}`;
@@ -3679,18 +4359,31 @@
       apiDebug.lastError = `chat api failed: ${response.status}`;
       throw new Error(`chat api failed: ${response.status}`);
     }
-    apiWindowCache.add(cacheKey);
 
     const data = await response.json();
     apiDebug.lastResponseShape = describeApiResponseShape(data);
     const messages = extractApiMessages(data);
+    apiWindowCache.set(cacheKey, messages);
     apiDebug.lastMessageCount = messages.length;
-    let acceptedCount = 0;
-    for (const message of messages) {
-      if (rememberApiMessage(message)) acceptedCount += 1;
-    }
-    apiDebug.lastAcceptedMessageCount = acceptedCount;
+    apiDebug.lastAcceptedMessageCount = rememberApiMessages(messages, targetKeys, { beforeTimestamp });
     return messages;
+  }
+
+  function normalizeTargetKeySet(values) {
+    if (!values) return null;
+    const list = Array.isArray(values) ? values : [values];
+    const keys = list
+      .map((value) => normalizeUsername(value))
+      .filter(Boolean);
+    return keys.length ? new Set(keys) : null;
+  }
+
+  function rememberApiMessages(messages, targetKeys = null, options = {}) {
+    let acceptedCount = 0;
+    for (const message of messages || []) {
+      if (rememberApiMessage(message, targetKeys, options)) acceptedCount += 1;
+    }
+    return acceptedCount;
   }
 
   function describeApiResponseShape(data) {
@@ -3762,10 +4455,13 @@
     return Boolean(looksLikeUsernameToken(username, { allowNumericOnly: true }) && getApiMessageText(message) && getApiMessageTimestamp(message));
   }
 
-  function rememberApiMessage(message) {
+  function rememberApiMessage(message, targetKeys = null, options = {}) {
     const username = getApiMessageUsername(message);
-    const text = getApiMessageText(message);
+    if (targetKeys?.size && !targetKeys.has(normalizeUsername(username))) return false;
     const timestamp = getApiMessageTimestamp(message);
+    const beforeTimestamp = Number(options.beforeTimestamp) > 0 ? Number(options.beforeTimestamp) : 0;
+    if (beforeTimestamp && timestamp >= beforeTimestamp - 1000) return false;
+    const text = getApiMessageText(message);
     if (!username || !text || !timestamp) return false;
     const remembered = rememberMessage(username, text, timestamp, getApiMessageId(message), "api", "posted");
     apiDebug.apiMessagesRemembered += 1;
@@ -3922,6 +4618,7 @@
 
   installRouteChangeListeners();
   installSettingsListener();
+  installRealtimeWsBridge();
   loadSettings().finally(() => initializeStreamContext()).finally(() => loadHistory()).finally(() => {
     scanPage();
     scheduleFollowedChannelsSync(1500);
@@ -3945,6 +4642,7 @@
     clearTimeout(suspiciousReportTimer);
     suspiciousReportTimer = 0;
     sendSuspiciousUsersReset();
+    window.removeEventListener("message", handleRealtimeWsBridgeMessage);
     observer.disconnect();
   }, { once: true });
 

@@ -25,13 +25,24 @@
   "permissions": [
     "activeTab",
     "storage",
-    "scripting"
+    "notifications"
   ],
   "host_permissions": [
     "https://kick.com/*",
     "https://www.kick.com/*"
   ],
   "content_scripts": [
+    {
+      "matches": [
+        "https://kick.com/*",
+        "https://www.kick.com/*"
+      ],
+      "js": [
+        "inject_early.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
     {
       "matches": [
         "https://kick.com/*",

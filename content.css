@@ -88,12 +88,42 @@
   justify-content: center;
   width: 18px;
   height: 18px;
-  border: 1px solid rgba(255, 92, 92, 0.55);
+  border: 1px solid rgba(255, 92, 92, 0.75);
   border-radius: 50%;
-  background: rgba(255, 92, 92, 0.14);
-  color: #ff6b6b;
+  background: rgba(255, 92, 92, 0.28);
+  color: #ffd7da;
   font-size: 12px;
   line-height: 1;
+}
+
+.kch-popover__risk--threat {
+  border-color: #ff5a62;
+  background: rgba(255, 90, 98, 0.36);
+  color: #ffe7e9;
+}
+
+.kch-popover__risk--privacy {
+  border-color: #5bb5ff;
+  background: rgba(91, 181, 255, 0.34);
+  color: #e8f5ff;
+}
+
+.kch-popover__risk--watch {
+  border-color: #f7cf3b;
+  background: rgba(247, 207, 59, 0.34);
+  color: #fff6d1;
+}
+
+.kch-popover__risk--broadcaster {
+  border-color: #53fc18;
+  background: rgba(83, 252, 24, 0.28);
+  color: #dfffd0;
+}
+
+.kch-popover__risk--bot {
+  border-color: #c07bff;
+  background: rgba(192, 123, 255, 0.32);
+  color: #f1e8ff;
 }
 
 .kch-popover__refresh {
@@ -216,7 +246,7 @@
 
 .kch-popover__item {
   display: grid;
-  grid-template-columns: 74px minmax(0, 1fr);
+  grid-template-columns: 56px minmax(0, 1fr);
   align-items: start;
   column-gap: 10px;
   padding: 7px 12px;
@@ -319,4 +349,12 @@
     transform: scale(1);
     box-shadow: 0 16px 48px rgba(0, 0, 0, 0.38);
   }
+}
+
+.kch-emote {
+  display: inline-block;
+  width: 24px;
+  height: 24px;
+  vertical-align: middle;
+  object-fit: contain;
 }

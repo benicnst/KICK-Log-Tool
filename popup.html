@@ -27,31 +27,31 @@
       </header>
 
       <div id="main-view" class="klt-popup__view">
-        <section class="klt-popup__settings klt-popup__settings--compact" aria-label="検出時の動作">
-          <div class="klt-popup__setting klt-popup__setting--action">
-            <div class="klt-popup__label">
-              <span class="klt-icon klt-icon--bolt" aria-hidden="true"></span>
-              <span>検出時の動作</span>
-            </div>
-            <div id="alert-action" class="klt-popup__segmented" data-alert-action="list" role="group" aria-label="リスト検出時の動作">
-              <button type="button" data-action="notify">
-                <span class="klt-icon klt-icon--bell" aria-hidden="true"></span>
-                <span>通知</span>
-              </button>
-              <button type="button" data-action="auto-pin">
-                <span class="klt-icon klt-icon--popup" aria-hidden="true"></span>
-                <span>自動ポップアップ</span>
-              </button>
-              <button type="button" data-action="off">
-                <span class="klt-icon klt-icon--ban" aria-hidden="true"></span>
-                <span>オフ</span>
-              </button>
-            </div>
-          </div>
-        </section>
 
         <section class="klt-popup__section">
           <h2>検出一覧</h2>
+          <div id="detection-tabs" class="klt-popup__tabs" role="tablist" aria-label="検出タブ">
+            <button role="tab" id="tab-broadcaster" data-tab="broadcaster" class="klt-popup__tab is-active">
+              <span class="klt-icon klt-icon--users" aria-hidden="true"></span>
+              <span class="klt-tab-label">配信者</span>
+              <span class="klt-tab-badge" id="badge-broadcaster" hidden></span>
+            </button>
+            <button role="tab" id="tab-watch" data-tab="watch" class="klt-popup__tab">
+              <span class="klt-icon klt-icon--eye" aria-hidden="true"></span>
+              <span class="klt-tab-label">ウォッチ</span>
+              <span class="klt-tab-badge" id="badge-watch" hidden></span>
+            </button>
+            <button role="tab" id="tab-bot" data-tab="bot" class="klt-popup__tab">
+              <span class="klt-icon klt-icon--search" aria-hidden="true"></span>
+              <span class="klt-tab-label">BOT/連投</span>
+              <span class="klt-tab-badge" id="badge-bot" hidden></span>
+            </button>
+            <button role="tab" id="tab-other" data-tab="other" class="klt-popup__tab">
+              <span class="klt-icon klt-icon--shield" aria-hidden="true"></span>
+              <span class="klt-tab-label">その他</span>
+              <span class="klt-tab-badge" id="badge-other" hidden></span>
+            </button>
+          </div>
           <div id="list" class="klt-popup__list" aria-live="polite"></div>
         </section>
       </div>
@@ -66,6 +66,61 @@
         </div>
 
         <div class="klt-popup__list-editor">
+          <section class="klt-popup__settings klt-popup__settings--compact" aria-label="検出時の動作">
+            <div class="klt-popup__setting klt-popup__setting--action">
+              <div class="klt-popup__label">
+                <span class="klt-icon klt-icon--bolt" aria-hidden="true"></span>
+                <span>検出時の動作</span>
+              </div>
+              <div id="alert-action" class="klt-popup__segmented" data-alert-action="list" role="group" aria-label="リスト検出時の動作">
+                <button type="button" data-action="notify">
+                  <span class="klt-icon klt-icon--bell" aria-hidden="true"></span>
+                  <span>通知</span>
+                </button>
+                <button type="button" data-action="auto-pin">
+                  <span class="klt-icon klt-icon--popup" aria-hidden="true"></span>
+                  <span>自動ポップアップ</span>
+                </button>
+                <button type="button" data-action="off">
+                  <span class="klt-icon klt-icon--ban" aria-hidden="true"></span>
+                  <span>オフ</span>
+                </button>
+              </div>
+            </div>
+
+            <div class="klt-popup__setting">
+              <div class="klt-popup__label">
+                <span class="klt-icon klt-icon--pin" aria-hidden="true"></span>
+                <span>自動ポップアップ</span>
+              </div>
+              <div class="klt-popup__hint">検出時の動作が自動ポップアップの場合に使います。</div>
+              <div class="klt-popup__pin-select-row">
+                <span class="klt-icon klt-icon--person" aria-hidden="true"></span>
+                <span class="klt-popup__pin-label">最大人数</span>
+                <select id="max-pinned-popovers" class="klt-popup__pin-select" aria-label="自動ポップアップする最大数">
+                  <option value="0">0</option>
+                  <option value="1">1</option>
+                  <option value="2">2</option>
+                  <option value="3">3</option>
+                  <option value="4">4</option>
+                  <option value="5">5</option>
+                </select>
+                <span class="klt-icon klt-icon--clock" aria-hidden="true"></span>
+                <span class="klt-popup__pin-label">表示時間</span>
+                <select id="temporary-popup-duration" class="klt-popup__pin-select" aria-label="ポップアップ表示時間">
+                  <option value="3">3秒</option>
+                  <option value="4">4秒</option>
+                  <option value="5">5秒</option>
+                  <option value="6">6秒</option>
+                  <option value="7">7秒</option>
+                  <option value="8">8秒</option>
+                  <option value="9">9秒</option>
+                  <option value="10">10秒</option>
+                </select>
+              </div>
+            </div>
+          </section>
+
           <div class="klt-popup__setting" data-list-setting="broadcasterList">
             <div class="klt-popup__setting-header">
               <div>
@@ -81,10 +136,6 @@
               </label>
             </div>
             <div id="broadcaster-sync-status" class="klt-popup__sync-status">読み込み状況を確認中...</div>
-            <div style="margin-top:8px;">
-              <button id="debug-fetch" type="button" class="klt-popup__debug-button">デバッグ: フォロー数取得</button>
-              <div id="debug-output" class="klt-popup__debug-output" style="margin-top:6px;font-size:12px;white-space:pre-wrap;max-height:120px;overflow:auto;"></div>
-            </div>
             <div id="broadcaster-list-items" class="klt-popup__chips"></div>
           </div>
 
@@ -108,8 +159,8 @@
             <div class="klt-popup__setting-header">
               <div>
                 <div class="klt-popup__label">
-                  <span class="klt-icon klt-icon--star" aria-hidden="true"></span>
-                  <span>ウォッチ</span>
+                  <span class="klt-icon klt-icon--eye" aria-hidden="true"></span>
+                  <span>ウォッチリスト</span>
                 </div>
                 <div class="klt-popup__hint">登録IDがコメントしたら検出します。</div>
               </div>
@@ -126,38 +177,6 @@
               </button>
             </form>
             <div id="watchlist-items" class="klt-popup__chips"></div>
-          </div>
-
-          <div class="klt-popup__setting">
-            <div class="klt-popup__label">
-              <span class="klt-icon klt-icon--pin" aria-hidden="true"></span>
-              <span>自動ポップアップ</span>
-            </div>
-            <div class="klt-popup__hint">検出時の動作が自動ポップアップの場合に使います。</div>
-            <div class="klt-popup__pin-select-row">
-              <span class="klt-icon klt-icon--person" aria-hidden="true"></span>
-              <select id="max-pinned-popovers" class="klt-popup__pin-select" aria-label="自動ポップアップする最大数">
-                <option value="0">0</option>
-                <option value="1">1</option>
-                <option value="2">2</option>
-                <option value="3">3</option>
-                <option value="4">4</option>
-                <option value="5">5</option>
-              </select>
-              <span>人</span>
-              <select id="temporary-popup-duration" class="klt-popup__pin-select" aria-label="ポップアップ表示時間">
-                <option value="0">固定</option>
-                <option value="3">3</option>
-                <option value="4">4</option>
-                <option value="5">5</option>
-                <option value="6">6</option>
-                <option value="7">7</option>
-                <option value="8">8</option>
-                <option value="9">9</option>
-                <option value="10">10</option>
-              </select>
-              <span id="temporary-popup-duration-label">秒</span>
-            </div>
           </div>
 
           <div class="klt-popup__setting" data-list-setting="ignorelist">

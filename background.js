@@ -11,6 +11,25 @@
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (!message || typeof message !== "object") return false;
 
+    if (message.type === "KLT_SHOW_NOTIFICATION") {
+      const username = String(message.username || "");
+      const channelSlug = String(message.channelSlug || "");
+      const reasonLabel = String(message.reasonLabel || "検出");
+      const title = `KICK Log Tool｜${reasonLabel}`;
+      const body = channelSlug
+        ? `${username} が ${channelSlug} で検出されました`
+        : `${username} が検出されました`;
+      chrome.notifications.create({
+        type: "basic",
+        iconUrl: "icons/icon48.png",
+        title,
+        message: body,
+        priority: 1
+      });
+      sendResponse?.({ ok: true });
+      return true;
+    }
+
     if (message.type === UPDATE_TYPE) {
       const tabId = sender.tab?.id;
       if (typeof tabId !== "number") {
@@ -50,42 +69,6 @@
       return true;
     }
 
-    if (message.type === "KLT_EXECUTE_PAGE_FETCH") {
-      const tabId = sender.tab?.id || Number(message.tabId);
-      if (!Number.isFinite(tabId)) {
-        sendResponse?.({ ok: false, error: "No tabId" });
-        return true;
-      }
-
-      try {
-        chrome.scripting.executeScript({
-          target: { tabId: Number(tabId) },
-          world: "MAIN",
-          func: (path, origin, extraHeaders) => {
-            const headers = Object.assign({ Accept: "application/json" }, extraHeaders || {});
-            return fetch(origin + path, { credentials: "include", headers })
-              .then(async (r) => {
-                const text = await r.text();
-                try {
-                  return { ok: r.ok, status: r.status, json: JSON.parse(text) };
-                } catch (e) {
-                  return { ok: r.ok, status: r.status, text };
-                }
-              })
-              .catch((e) => ({ error: String(e) }));
-          },
-          args: [String(message.path || ""), String(message.origin || "https://kick.com"), message.headers || {}]
-        }, (results) => {
-          const res = results?.[0]?.result;
-          sendResponse?.({ ok: true, result: res });
-        });
-        return true;
-      } catch (error) {
-        sendResponse?.({ ok: false, error: String(error) });
-        return true;
-      }
-    }
-
     return false;
   });
 
@@ -107,7 +90,12 @@
         .map((user) => ({
           username: String(user.username),
           profileUrl: isKickProfileUrl(user.profileUrl) ? user.profileUrl : getProfileUrl(user.username),
+          avatarUrl: isHttpUrl(user.avatarUrl) ? String(user.avatarUrl) : "",
+          detectionCategory: String(user.detectionCategory || ""),
           reasons: Array.isArray(user.reasons) ? user.reasons.map(String).slice(0, 8) : [],
+          riskScore: Math.max(0, Math.min(100, Number(user.riskScore) || 0)),
+          riskRuleCount: Math.max(0, Number(user.riskRuleCount) || 0),
+          riskCritical: Boolean(user.riskCritical),
           firstDetectedAt: Number(user.firstDetectedAt) || Date.now(),
           lastDetectedAt: Number(user.lastDetectedAt) || Date.now(),
           lastCommentAt: Number(user.lastCommentAt) || 0,
@@ -179,6 +167,15 @@
       return /^https:$/.test(url.protocol) &&
         (url.hostname === "kick.com" || url.hostname === "www.kick.com") &&
         url.pathname.split("/").filter(Boolean).length === 1;
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  function isHttpUrl(value) {
+    try {
+      const url = new URL(String(value || ""));
+      return url.protocol === "https:" || url.protocol === "http:";
     } catch (_error) {
       return false;
     }

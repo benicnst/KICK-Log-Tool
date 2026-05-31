@@ -17,7 +17,7 @@
   const DEFAULT_SETTINGS = {
     alertAction: "auto-pin",
     maxPinnedPopovers: DEFAULT_MAX_PINNED_POPOVERS,
-    temporaryPopupDuration: 0,
+    temporaryPopupDuration: 8,
     watchlistEnabled: true,
     ignorelistEnabled: true,
     broadcasterListEnabled: true,
@@ -66,47 +66,12 @@
   let settingsVisible = false;
   let settings = { ...DEFAULT_SETTINGS };
   let followedChannelsSyncStatus = createDefaultFollowedChannelsSyncStatus();
-  const debugFetchButton = document.querySelector("#debug-fetch");
-  const debugOutput = document.querySelector("#debug-output");
-
+  let currentReport = null;
+  let selectedDetectionTab = 'broadcaster';
   bindEvents();
   init();
 
   function bindEvents() {
-    debugFetchButton?.addEventListener("click", async () => {
-      if (!debugOutput) return;
-      if (!activeTabId) {
-        debugOutput.textContent = "対象タブが見つかりません。Kickのタブを開いてください。";
-        return;
-      }
-
-      debugOutput.textContent = "実行中...";
-      try {
-        // Request page credentials from content script
-        let creds = null;
-        try {
-          creds = await sendTabMessage(activeTabId, { type: "KLT_GET_PAGE_CREDENTIALS" });
-        } catch (_e) {
-          creds = null;
-        }
-
-        const headers = { "X-Requested-With": "XMLHttpRequest" };
-        if (creds && creds.xsrf) headers["X-XSRF-TOKEN"] = creds.xsrf;
-        if (creds && creds.token) headers["Authorization"] = `Bearer ${creds.token}`;
-
-        const resp = await sendRuntimeMessage({ type: "KLT_EXECUTE_PAGE_FETCH", path: "/api/v2/channels/followed?per_page=1", tabId: activeTabId, headers });
-        if (resp && resp.result) {
-          debugOutput.textContent = JSON.stringify(resp.result, null, 2);
-          return;
-        }
-
-        const resp2 = await sendRuntimeMessage({ type: "KLT_EXECUTE_PAGE_FETCH", path: "/api/v1/channels/followed?per_page=1", tabId: activeTabId, headers });
-        debugOutput.textContent = JSON.stringify(resp2?.result || resp2 || {}, null, 2);
-      } catch (e) {
-        debugOutput.textContent = `エラー: ${String(e)}`;
-      }
-    });
-
     clearButton.addEventListener("click", clearDetectedUsers);
     settingsToggle.addEventListener("click", toggleSettingsView);
 
@@ -137,6 +102,18 @@
       if (!pinTarget) return;
       pinDetectedUser(pinTarget.dataset.pinUsername);
     });
+
+    // Detection tab handling
+    const tabButtons = [...document.querySelectorAll('#detection-tabs .klt-popup__tab')];
+    for (const btn of tabButtons) {
+      btn.addEventListener('click', (e) => {
+        const t = btn.dataset.tab;
+        selectedDetectionTab = t || 'bot';
+        tabButtons.forEach(b => b.classList.toggle('is-active', b === btn));
+        // re-render using last report
+        if (currentReport) renderReport(currentReport);
+      });
+    }
 
     for (const group of actionGroups) {
       group.addEventListener("click", (event) => {
@@ -237,16 +214,20 @@
       return;
     }
 
-    let report = null;
-    try {
-      const response = await sendTabMessage(activeTabId, { type: GET_CONTENT_REPORT_TYPE });
-      report = response?.report || null;
-    } catch (_error) {
-      const response = await sendRuntimeMessage({ type: GET_BACKGROUND_REPORT_TYPE, tabId: activeTabId });
-      report = response?.report || null;
+    async function fetchAndRender() {
+      let report = null;
+      try {
+        const response = await sendTabMessage(activeTabId, { type: GET_CONTENT_REPORT_TYPE });
+        report = response?.report || null;
+      } catch (_error) {
+        const response = await sendRuntimeMessage({ type: GET_BACKGROUND_REPORT_TYPE, tabId: activeTabId });
+        report = response?.report || null;
+      }
+      renderReport(report || createEmptyReport());
     }
 
-    renderReport(report || createEmptyReport());
+    await fetchAndRender();
+    setInterval(fetchAndRender, 2000);
   }
 
   async function clearDetectedUsers() {
@@ -266,27 +247,45 @@
     const users = Array.isArray(report.users) ? report.users : [];
     clearButton.disabled = users.length === 0;
 
+    // store current report for tab re-rendering
+    currentReport = report;
+
     const channelName = report.channelSlug || getChannelSlugFromUrl(report.pageUrl) || getChannelSlugFromUrl(activeTabUrl);
-    channel.textContent = channelName ? `対象: ${channelName}` : "対象: Kickページ";
-    summary.textContent = users.length
-      ? `検出 ${users.length}件`
-      : "検出はありません";
+    const channelLabel = channelName ? `対象: ${channelName}` : "対象: Kickページ";
+
+    // filter users by selected tab
+    const filtered = users.filter((u) => matchesDetectionTab(u, selectedDetectionTab));
+
+    channel.textContent = `${channelLabel}　検出: ${users.length}件`;
+    summary.textContent = "";
+    summary.hidden = true;
+
+    // タブバッジ更新
+    for (const tab of ['broadcaster', 'watch', 'bot', 'other']) {
+      const badge = document.getElementById(`badge-${tab}`);
+      if (!badge) continue;
+      const count = users.filter((u) => matchesDetectionTab(u, tab)).length;
+      if (count > 0) {
+        badge.textContent = count > 99 ? '99+' : String(count);
+        badge.hidden = false;
+      } else {
+        badge.hidden = true;
+      }
+    }
 
     list.replaceChildren();
-    if (!users.length) {
+    if (!filtered.length) {
       renderEmpty("検出されたアカウントはまだありません。");
       return;
     }
 
-    for (const user of users) {
+    for (const user of filtered) {
       const item = document.createElement("div");
       item.className = "klt-popup__item";
       item.title = `${user.username} を固定表示`;
 
-      const skull = document.createElement("span");
-      skull.className = "klt-popup__skull";
-      skull.textContent = getDetectionIcon(user.reasons);
-      skull.dataset.pinUsername = user.username;
+      const badge = createDetectionBadge(user);
+      badge.dataset.pinUsername = user.username;
 
       const body = document.createElement("span");
       body.className = "klt-popup__item-content";
@@ -303,9 +302,14 @@
 
       const reasons = document.createElement("span");
       reasons.className = "klt-popup__reasons";
-      reasons.textContent = Array.isArray(user.reasons) && user.reasons.length
+      const hasScore = Number.isFinite(Number(user.riskScore)) && Number(user.riskScore) > 0;
+      const scoreText = hasScore
+        ? `score ${Math.max(0, Math.min(100, Math.round(Number(user.riskScore))))} (${Math.max(0, Math.round(Number(user.riskRuleCount) || 0))}条件)`
+        : "";
+      const reasonText = Array.isArray(user.reasons) && user.reasons.length
         ? user.reasons.join(" / ")
         : "検出";
+      reasons.textContent = scoreText ? `${scoreText} | ${reasonText}` : reasonText;
 
       const detail = document.createElement("button");
       detail.className = "klt-popup__item-body";
@@ -326,7 +330,7 @@
 
       body.append(name, detail);
 
-      item.append(skull, body);
+      item.append(badge, body);
       list.appendChild(item);
     }
   }
@@ -347,13 +351,57 @@
     }
   }
 
-  function getDetectionIcon(reasons) {
-    if (!Array.isArray(reasons)) return "💀";
-    if (reasons.some((reason) => /殺害|危害|暴力|脅迫/.test(reason))) return "🔪";
-    if (reasons.some((reason) => /個人情報|住所|電話番号|メール/.test(reason))) return "👤";
-    if (reasons.includes("ウォッチリスト")) return "★";
-    if (reasons.includes("配信者リスト")) return "K";
-    return reasons.length ? "🤖" : "💀";
+  function createDetectionBadge(user) {
+    const category = getDetectionCategory(user);
+    const badge = document.createElement("span");
+    badge.className = `klt-popup__skull klt-popup__skull--${category}`;
+
+    if (category === "broadcaster" && user?.avatarUrl) {
+      const image = document.createElement("img");
+      image.className = "klt-popup__skull-avatar";
+      image.src = String(user.avatarUrl);
+      image.alt = `${user.username} avatar`;
+      image.referrerPolicy = "no-referrer";
+      image.loading = "lazy";
+      badge.appendChild(image);
+      return badge;
+    }
+
+    badge.textContent = getDetectionIconForCategory(category);
+    return badge;
+  }
+
+  function getDetectionCategory(user) {
+    const explicit = String(user?.detectionCategory || "");
+    if (["threat", "privacy", "watch", "broadcaster", "bot"].includes(explicit)) return explicit;
+
+    const reasons = Array.isArray(user?.reasons) ? user.reasons : [];
+    if (reasons.some((reason) => /殺害|危害|暴力|脅迫/.test(reason))) return "threat";
+    if (reasons.some((reason) => /個人情報|住所|電話番号|メール/.test(reason))) return "privacy";
+    if (reasons.includes("ウォッチリスト")) return "watch";
+    if (reasons.includes("配信者リスト")) return "broadcaster";
+    if (reasons.length) return "bot";
+    return "default";
+  }
+
+  function getDetectionIconForCategory(category) {
+    if (category === "threat") return "🔪";
+    if (category === "privacy") return "👤";
+    if (category === "watch") return "★";
+    if (category === "broadcaster") return "📺";
+    if (category === "bot") return "🤖";
+    return "💀";
+  }
+
+  function matchesDetectionTab(user, tab) {
+    if (!user || !tab) return false;
+    const reasons = Array.isArray(user.reasons) ? user.reasons : [];
+    if (tab === 'broadcaster') return reasons.includes('配信者リスト');
+    if (tab === 'watch') return reasons.includes('ウォッチリスト');
+    const isBotReason = (r) => /連投|件以上|コメント|間隔|反復|絵文字|スタンプ|BOT|URL|大量反復|同一文/.test(r);
+    if (tab === 'bot') return !reasons.includes('配信者リスト') && !reasons.includes('ウォッチリスト') && reasons.some(isBotReason);
+    if (tab === 'other') return !reasons.includes('配信者リスト') && !reasons.includes('ウォッチリスト') && !reasons.some(isBotReason);
+    return !reasons.includes('配信者リスト') && !reasons.includes('ウォッチリスト');
   }
 
   function renderEmpty(message) {
@@ -406,13 +454,7 @@
 
   function renderBroadcasterCount(container, values) {
     container.replaceChildren();
-    const count = Array.isArray(values) ? values.length : 0;
-    const status = normalizeFollowedChannelsSyncStatus(followedChannelsSyncStatus);
-    const total = status.totalCount > 0 && status.totalCount >= count ? `/${status.totalCount}` : "";
-    const el = document.createElement("span");
-    el.className = "klt-popup__broadcaster-count";
-    el.textContent = `チャンネル合計 ${count}${total}件`;
-    container.appendChild(el);
+    container.style.display = 'none';
   }
 
   function renderUsernameChips(container, listKey, values) {
@@ -437,7 +479,7 @@
     if (!container.childElementCount) {
       const empty = document.createElement("span");
       empty.className = "klt-popup__hint";
-      empty.textContent = "未登録";
+      empty.textContent = "";
       container.appendChild(empty);
     }
   }
@@ -588,8 +630,7 @@
 
   function clampTemporaryPopupDuration(value) {
     const numeric = Number(value);
-    if (!Number.isFinite(numeric)) return 0;
-    if (numeric === 0) return 0;
+    if (!Number.isFinite(numeric)) return DEFAULT_SETTINGS.temporaryPopupDuration;
     return Math.min(10, Math.max(3, Math.round(numeric)));
   }
 
@@ -610,7 +651,8 @@
     if (status.state === "success") {
       broadcasterSyncStatus.classList.add("is-success");
       const source = status.source ? ` / ${status.source}` : "";
-      const total = status.totalCount > 0 ? `/${status.totalCount}` : "";
+      const displayedTotal = Math.max(Number(status.totalCount) || 0, Number(status.listCount) || 0);
+      const total = displayedTotal > 0 ? `/${displayedTotal}` : "";
       broadcasterSyncStatus.textContent = `自動読み込み済み: ${status.listCount}${total}件${source}`;
       return;
     }

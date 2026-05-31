@@ -496,6 +496,9 @@
   function createIcon(name) {
     const icon = document.createElement("span");
     icon.className = `klt-icon klt-icon--${name}`;
+    if (name === "pin") {
+      icon.classList.add("klt-icon--pin-tilt");
+    }
     icon.setAttribute("aria-hidden", "true");
     return icon;
   }

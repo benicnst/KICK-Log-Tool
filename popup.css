@@ -262,6 +262,11 @@ p {
   width: 100%;
 }
 
+.klt-popup__item-body {
+  position: relative;
+  padding-right: 52px;
+}
+
 .klt-popup__item-body:hover .klt-popup__reasons,
 .klt-popup__item-body:hover .klt-popup__message,
 .klt-popup__name-button:hover {
@@ -314,10 +319,19 @@ p {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  margin-top: 6px;
+  position: absolute;
+  top: 0;
+  right: 0;
+  margin-top: 0;
   color: var(--klt-muted);
   font-size: 11px;
   line-height: 1;
+  pointer-events: none;
+}
+
+.klt-popup__pin-hint .klt-icon {
+  width: 1.15em;
+  height: 1.15em;
 }
 
 .klt-popup__settings {

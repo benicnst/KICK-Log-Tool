@@ -1404,6 +1404,7 @@
   function periodicRefresh() {
     handlePossibleChannelChange();
     if (shouldRunPeriodicDomScan()) scanPage();
+    refreshListedDetectionsFromVisibleChat();
     closeStaleHoverPopover();
     if (suspiciousUsers.size > 0) scheduleSuspiciousUsersReport(SUSPICIOUS_REPORT_RETRY_MS);
   }
@@ -1423,6 +1424,42 @@
 
   function shouldPreferRealtimeWsIngestion() {
     return hasRecentRealtimeWsMessage();
+  }
+
+  function refreshListedDetectionsFromVisibleChat() {
+    if (getAlertAction() === "off") return;
+    if (!userSettings.watchlistEnabled && !userSettings.broadcasterListEnabled) return;
+
+    let changed = false;
+    for (const chatRoot of getChatRoots()) {
+      const usernameElements = [...chatRoot.querySelectorAll(ANY_USERNAME_SELECTOR)]
+        .filter((element) => isUsableUsernameElement(element));
+
+      for (const usernameElement of usernameElements) {
+        const username = getUsernameValue(usernameElement).replace(/^@/, "");
+        const key = normalizeUsername(username);
+        if (!key || isIgnoredUser(key) || suspiciousUsers.has(key)) continue;
+
+        const reasons = [];
+        if (isWatchlistedUser(key)) reasons.push("ウォッチリスト");
+        if (isBroadcasterListedUser(key)) reasons.push("配信者リスト");
+        if (!reasons.length) continue;
+
+        const row = findLikelyRowFromUsername(usernameElement);
+        if (row) scanRow(row);
+
+        const history = userHistory.get(key);
+        rememberDetectedUser(
+          key,
+          history?.displayName || username,
+          reasons,
+          history?.messages || []
+        );
+        changed = true;
+      }
+    }
+
+    if (changed) sendSuspiciousUsersReport();
   }
 
   function hasRecentRealtimeWsMessage() {
@@ -2681,9 +2718,14 @@
     const usernames = [];
     const seen = new Set();
     let cursor = 0;
+    const visitedCursors = new Set();
+    let pages = 0;
 
     try {
       while (true) {
+        if (pages >= FOLLOWED_CHANNELS_MAX_PAGES) break;
+        pages += 1;
+
         const url = `${API_ORIGIN}/api/v2/channels/followed-page?cursor=${cursor}`;
         const resp = await fetch(url, {
           headers: {
@@ -2702,21 +2744,28 @@
         }
 
         const data = await resp.json();
-        const channels = data.channels || [];
+        const items = getFollowedChannelItems(data);
+        const pageUsernames = [];
 
-        for (const ch of channels) {
-          const slug = ch.channel_slug || ch.slug || ch.username || "";
-          if (slug && /^[a-z0-9_.-]{1,32}$/i.test(slug)) {
-            const normalized = slug.replace(/^@/, "").trim().toLowerCase();
-            if (!seen.has(normalized)) {
-              seen.add(normalized);
-              usernames.push(normalized);
-            }
-          }
+        for (const item of items) {
+          const slug = getFollowedItemUsername(item);
+          if (!slug || !/^[a-z0-9_.-]{1,32}$/i.test(slug)) continue;
+          const normalized = slug.replace(/^@/, "").trim().toLowerCase();
+          if (seen.has(normalized)) continue;
+          seen.add(normalized);
+          usernames.push(normalized);
+          pageUsernames.push(normalized);
         }
 
-        if (!data.nextCursor || channels.length === 0) break;
-        cursor = data.nextCursor;
+        const nextCursor = getFollowedNextCursor(data);
+        const hasMore = hasFollowedMore(data);
+        if (!hasMore && !nextCursor) break;
+        if (!nextCursor) break;
+        if (visitedCursors.has(String(nextCursor))) break;
+        if (pageUsernames.length === 0 && seen.size > 0 && !hasMore) break;
+
+        visitedCursors.add(String(nextCursor));
+        cursor = nextCursor;
       }
 
       return {
@@ -2729,6 +2778,49 @@
     } catch (err) {
       return { usernames: [], reason: `通信エラー: ${err.message}`, loginRequired: false };
     }
+  }
+
+  function getFollowedNextCursor(data) {
+    const candidates = [
+      data?.nextCursor,
+      data?.next_cursor,
+      data?.cursor,
+      data?.pagination?.cursor,
+      data?.pagination?.nextCursor,
+      data?.pagination?.next_cursor,
+      data?.data?.nextCursor,
+      data?.data?.next_cursor,
+      data?.data?.cursor,
+      data?.data?.pagination?.cursor,
+      data?.data?.pagination?.nextCursor,
+      data?.data?.pagination?.next_cursor
+    ];
+
+    for (const value of candidates) {
+      if (value === null || value === undefined || value === "") continue;
+      return value;
+    }
+
+    return null;
+  }
+
+  function hasFollowedMore(data) {
+    const candidates = [
+      data?.has_more,
+      data?.hasMore,
+      data?.pagination?.has_more,
+      data?.pagination?.hasMore,
+      data?.data?.has_more,
+      data?.data?.hasMore,
+      data?.data?.pagination?.has_more,
+      data?.data?.pagination?.hasMore
+    ];
+
+    for (const value of candidates) {
+      if (typeof value === "boolean") return value;
+    }
+
+    return false;
   }
 
   function getSessionTokenFromCookie() {

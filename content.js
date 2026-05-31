@@ -2013,7 +2013,7 @@
       const reasonLabel = Array.isArray(reasons) && reasons.length
         ? reasons.join(" / ")
         : "検出";
-      chrome.runtime.sendMessage({
+      sendRuntimeMessage({
         type: "KLT_SHOW_NOTIFICATION",
         username: String(username),
         channelSlug: activeChannelSlug || getChannelSlug() || "",

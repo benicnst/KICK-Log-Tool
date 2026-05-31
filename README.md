@@ -19,10 +19,10 @@ This project is not affiliated with, endorsed by, or sponsored by Kick.
 - 固定したポップアップは画面上の好きな場所へドラッグできます。
 - レイドなどで別チャンネルへ移動した場合、固定ポップアップと一時履歴を自動で閉じます。
 - 表示中または固定中のユーザーに新しいコメントが追加された場合、ポップアップ内容を更新します。
-- 通常の新着コメントはKickチャット欄のDOM監視でリアルタイム取得します。
+- 通常の新着コメントはWebSocketを最優先でリアルタイム取得し、WebSocketが止まった時のみDOM監視へフォールバックします。
 - コメントがリアルタイムに追加されたと判断できる場合、DOMに時刻が無くても取得時刻を投稿時刻として扱います。
-- チャット一時停止中のみ、固定中ユーザーの取りこぼしを減らすために限定的な非公式API確認を行います。
-- チャット一時停止を解除すると、API確認ではなくチャット表示欄のリアルタイム取得に戻ります。
+- APIは固定中ユーザーの過去補完専用として使い、リアルタイムで取得できた投稿より過去のコメントだけを補完します。
+- API補完は固定中ユーザーごとに最大10件までで停止します。
 - API確認中は固定ユーザー名の横に回転するリロードマークを表示します。
 - 複数の不審な投稿パターンに該当した場合、ユーザー名横に検出種別アイコンを表示します。
 - 検出時の動作を、通知だけ・一時表示・自動固定・オフから選べます。
@@ -70,8 +70,8 @@ EdgeとBraveもChromium系ブラウザのため、未パッケージ拡張機能
 - 配信者リストに登録された配信者IDがコメントすると検出します。
 - 配信者リストがONの場合、ログイン中のKickページでフォロー中チャンネルを自動同期します。
 - フォロー中APIで取得できない場合は、ページ上に表示されているフォロー中欄を補助的に読み取ります。自動読み込みに失敗した場合は詳細設定内に理由を表示します。
-- チャットがスクロールで一時停止している間だけ、固定ユーザーの新着確認に限定API確認を使います。
-- チャット一時停止を解除すると、表示チャット欄のDOM監視によるリアルタイム取得に戻ります。
+- WebSocket取得が有効な間はWebSocketを最優先し、停止時のみDOM監視へフォールバックします。
+- 固定中ユーザーのAPI補完は、リアルタイム取得分より過去コメントのみを対象にします。
 - リアルタイム取得で投稿時刻が取れない場合は、直近のKick APIと照合して投稿時刻への補正を試みます。
 
 ### 検出アイコンについて
@@ -80,17 +80,18 @@ EdgeとBraveもChromium系ブラウザのため、未パッケージ拡張機能
 
 投稿時刻がAPI、ページ上の時刻情報、またはリアルタイム追加判定から取得できたコメントだけを判定に使います。投稿時刻が取れないコメントは「取得」時刻として区別して表示し、検出判定には使いません。
 
-以下の条件のうち、2つ以上に該当した場合のみ検出アイコンを表示します。
+原則として、スコアが閾値以上かつ複数条件に該当した場合に検出アイコンを表示します。個人情報投稿や危害予告などは強い検出要素として扱います。
 
-- 60秒以内に5件以上コメントしている。
-- 120秒以内に8件以上コメントしている。
+- 30秒以内に8件以上コメントしている。
+- 60秒以内に12件以上コメントしている。
 - 正規化後の同一コメントが3回以上ある。
 - 正規化後の同一長文コメントが2回以上ある。
 - 2秒以内に3件以上コメントしている。
 - 10秒以内に5件以上コメントしている。
-- 6件以上のコメントがあり、平均投稿間隔が8秒以下。
+- 10件以上のコメントがあり、平均投稿間隔が5秒以下。
 - URL風コメントが3件以上ある。
 - 1コメント内で同じ語句を大量に繰り返している。
+- 複数アカウントが短時間に同じ文面を繰り返し投稿している。
 - 絵文字やスタンプ系の文字列を大量に投稿している。
 - 住所、電話番号、メールアドレスなど個人情報らしき投稿を連投している。
 - 殺害や危害予告らしき投稿を連投している。
@@ -138,7 +139,7 @@ window.__KICK_CHAT_HISTORY_HOVER__.setModerationActionsEnabled(false)
 - `activeTab`権限は、拡張機能アイコンをクリックした時に現在のKickタブから検出一覧を取得するために使います。
 - `storage`権限は、ドクロ判定時の動作、ウォッチリスト、無視リスト、配信者リストの設定保存に使います。
 - ページを開いている間だけKickページ側の`localStorage`へ一時保存し、ページを閉じる時に削除します。
-- 履歴補完、投稿時刻補正、チャット一時停止中の固定ユーザー確認、フォロー中チャンネルの自動同期のため、KickのAPIへ通信する場合があります。
+- 履歴補完、投稿時刻補正、固定中ユーザーの過去補完、フォロー中チャンネルの自動同期のため、KickのAPIへ通信する場合があります。
 - ユーザーごとの履歴は設定された最大件数までに制限されます。
 - 投稿時刻が取得できないコメントは、取得時刻として区別して表示します。
 - ログイントークンや個人情報の入力は不要です。
@@ -147,30 +148,18 @@ window.__KICK_CHAT_HISTORY_HOVER__.setModerationActionsEnabled(false)
 
 Kickには、この用途向けの安定した公開チャット履歴APIはありません。この拡張機能は、以下の場合に限定して非公式エンドポイントを使用します。
 
-- 同一配信内の過去履歴補完。
+- 固定中ユーザーの同一配信内の過去履歴補完（リアルタイム取得分より過去のみ）。
 - リアルタイム取得したコメントの投稿時刻補正。
-- チャットがスクロールで一時停止している間の固定ユーザー確認。
 - フォロー中チャンネルの配信者リストへの自動同期。
 
 不要な負荷を避けるため、APIアクセスは制限しています。
 
-- ホバー時の履歴補完は、そのユーザーのAPI探索が未完了の場合のみ実行します。
+- API補完は固定中ユーザーだけを対象にします。
+- API補完は、ユーザーごとに最大10件の過去コメント補完で停止します。
 - 履歴補完の探索範囲は最大240分、または同一配信の開始時刻までです。
-- 固定ユーザー確認はチャット一時停止中のみ約15秒間隔で実行します。
-- チャット一時停止を解除すると、固定ユーザー確認のAPI使用を停止します。
 - フォロー中チャンネルの自動同期は配信者リストがONの場合のみ実行し、短時間に連続実行しないよう制限しています。
 
 Kick側の仕様変更、認証状態、Cloudflare、CORS、レスポンス形式の変更によって、非公式APIによる取得は動作しなくなる可能性があります。
-
-### リリース手順
-
-配布用ZIPは以下で作成します。
-
-```bash
-scripts/package-release.sh
-```
-
-GitHub Releaseには、`dist/KICK-Log-Tool.zip`をアップロードしてください。このファイル名を毎回同じにすると、READMEのダウンロードリンクを変更せずに最新ReleaseのZIPへ誘導できます。
 
 ### 免責事項
 
@@ -194,10 +183,10 @@ GitHub Releaseには、`dist/KICK-Log-Tool.zip`をアップロードしてくだ
 - Pinned popups can be dragged anywhere on the screen.
 - Automatically closes pinned popups and clears temporary history when moving to another channel, such as after a raid.
 - Updates visible and pinned popups when new comments are captured.
-- Uses Kick chat DOM observation for normal realtime updates.
+- Uses WebSocket as the primary realtime source and falls back to DOM observation only when WebSocket capture is not active.
 - Treats capture time as posting time when messages are clearly added in realtime without a DOM timestamp.
-- Uses a limited unofficial Kick chat API only while chat is paused, and only for pinned users.
-- Returns to DOM-based realtime capture after chat pause is released.
+- Uses a limited unofficial Kick chat API only for pinned-user backfill, and only for messages older than realtime-captured history.
+- Stops API backfill per pinned user after up to 10 older messages are collected.
 - Shows a rotating reload icon next to pinned users while API checking is active.
 - Shows a detection-type icon when multiple suspicious posting patterns are detected.
 - Lets you choose the detection action: notify only, temporary popup, auto-pin, or off.
@@ -245,8 +234,8 @@ Edge and Brave support unpacked Chromium extensions.
 - Add broadcaster IDs to the broadcaster list to detect comments from those accounts.
 - When the broadcaster list is enabled, followed channels are synced automatically on logged-in Kick pages.
 - If the followed-channel API cannot be read, the extension falls back to the visible following section on the page. Failed sync attempts show a reason in settings.
-- When chat is paused by scrolling, pinned users are checked through the limited API refresh.
-- When chat pause is released, realtime capture returns to the visible chat DOM.
+- While WebSocket capture is active, WebSocket is prioritized and DOM capture is used only as fallback.
+- API backfill for pinned users targets only comments older than realtime-captured history.
 - When realtime capture does not include a posting time, the extension tries to correct it by matching recent Kick API messages.
 
 ### Detection Icons
@@ -255,17 +244,18 @@ Detection icons are not definitive proof of bots, automation, personal-informati
 
 Only comments with a posting time obtained from the Kick API, page timestamp data, or realtime-add detection are used for this check. Comments without an available posting time are labeled as captured time and are excluded from detection.
 
-The marker is shown only when 2 or more of these conditions are true:
+The marker is shown when the risk score is high enough and multiple suspicious conditions are matched. Personal-information or violence-like content is treated as a strong signal.
 
-- 5 or more comments within 60 seconds.
-- 8 or more comments within 120 seconds.
+- 8 or more comments within 30 seconds.
+- 12 or more comments within 60 seconds.
 - The same normalized comment appears 3 or more times.
 - The same normalized long comment appears 2 or more times.
 - 3 or more comments appear within 2 seconds.
 - 5 or more comments appear within 10 seconds.
-- The average interval between captured comments is 8 seconds or less, with at least 6 comments.
+- The average interval between captured comments is 5 seconds or less, with at least 10 comments.
 - 3 or more URL-like comments are detected.
 - One comment contains heavy repeated phrases.
+- Multiple accounts repeat the same message pattern in a short time window.
 - A comment contains a large amount of emoji or emote-like content.
 - Repeated comments appear to contain personal information such as an address, phone number, or email address.
 - Repeated comments appear to contain threats of killing or physical harm.
@@ -313,7 +303,7 @@ window.__KICK_CHAT_HISTORY_HOVER__.setModerationActionsEnabled(false)
 - The `activeTab` permission is used to read the detected-account list from the current Kick tab when you click the extension icon.
 - The `storage` permission is used only to save extension settings such as alert action, watchlist, ignore list, and broadcaster list.
 - It is temporarily stored in the Kick page's `localStorage` while the page is open and cleared when the page is closed.
-- The extension may communicate with Kick APIs for history backfill, posting-time correction, pinned-user checks while chat is paused, and followed-channel sync.
+- The extension may communicate with Kick APIs for history backfill, posting-time correction, pinned-user older-history backfill, and followed-channel sync.
 - History is limited to the configured maximum number of messages per user.
 - Comments without an available posting time are labeled as captured time.
 - The extension does not require a login token or any user-provided personal information.
@@ -322,30 +312,18 @@ window.__KICK_CHAT_HISTORY_HOVER__.setModerationActionsEnabled(false)
 
 Kick does not provide a stable public chat-history API for this use case. This extension uses limited unofficial endpoints for:
 
-- Backfilling previous history within the same stream.
+- Backfilling previous history for pinned users within the same stream, limited to messages older than realtime-captured history.
 - Correcting posting times for realtime-captured comments.
-- Checking pinned users while the Kick chat is paused because of scrolling.
 - Syncing followed channels into the broadcaster list.
 
 API access is intentionally limited to reduce unnecessary load:
 
-- Hover backfill is attempted only when API search for that user has not completed.
+- API backfill targets pinned users only.
+- API backfill stops after up to 10 older messages per pinned user.
 - Backfill search is capped at 240 minutes or the start time of the same stream.
-- Pinned-user API checks run about every 15 seconds only while chat pause is detected.
-- Pinned-user checks stop using the API once chat pause is released.
 - Followed-channel sync runs only when the broadcaster list is enabled and is rate-limited to avoid repeated requests.
 
 Unofficial API behavior can break if Kick changes its site, authentication, Cloudflare behavior, CORS behavior, or response format.
-
-### Release Process
-
-Create the distributable ZIP with:
-
-```bash
-scripts/package-release.sh
-```
-
-Upload `dist/KICK-Log-Tool.zip` to the GitHub Release. Keeping this asset filename the same for every release allows the README download link to always point to the latest release ZIP.
 
 ### Disclaimer
 

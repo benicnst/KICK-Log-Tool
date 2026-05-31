@@ -3033,12 +3033,8 @@
 
   function getPinIcon(pinned) {
     return `
-      <svg viewBox="0 0 24 24" aria-hidden="true" class="kch-popover__pin-icon ${pinned ? "kch-popover__pin-icon--active" : ""}">
-        <g class="kch-popover__pin-symbol" transform="rotate(-28 12 12)">
-          <circle class="kch-popover__pin-fill" cx="12" cy="7.2" r="5.6"></circle>
-          <rect class="kch-popover__pin-fill" x="10" y="11.2" width="4" height="9.2" rx="1.8"></rect>
-          <ellipse class="kch-popover__pin-highlight" cx="10" cy="5.4" rx="1.2" ry="1.8" transform="rotate(28 10 5.4)"></ellipse>
-        </g>
+      <svg viewBox="0 0 384 512" aria-hidden="true" class="kch-popover__pin-icon ${pinned ? "kch-popover__pin-icon--active" : ""}">
+        <path class="kch-popover__pin-fill" d="M32 32C32 14.3 46.3 0 64 0H320c17.7 0 32 14.3 32 32s-14.3 32-32 32H290.5l11.4 148.2c36.7 19.9 65.7 53.2 79.5 94.7l1 3c3.3 9.8 1.6 20.5-4.4 28.8s-15.7 13.3-26 13.3H32c-10.3 0-19.9-4.9-26-13.3s-7.7-19.1-4.4-28.8l1-3c13.8-41.5 42.8-74.8 79.5-94.7L93.5 64H64C46.3 64 32 49.7 32 32zM160 384h64v96c0 17.7-14.3 32-32 32s-32-14.3-32-32V384z"></path>
       </svg>
     `;
   }
@@ -3278,7 +3274,7 @@
     const strongInternalRepetitionCount = internalRepetitionStats.filter((value) => value.strong).length;
     const moderateInternalRepetitionCount = internalRepetitionStats.filter((value) => value.moderate).length;
     if (strongInternalRepetitionCount >= 1) {
-      addRule("単一コメント内の大量反復", 40);
+      addRule("単一コメント内の大量反復", 36);
     } else if (moderateInternalRepetitionCount >= 2) {
       addRule("コメント内の反復が多い", 16);
     }
@@ -3293,7 +3289,7 @@
       addRule("殺害/危害予告らしき投稿", 55);
     }
 
-    const isCritical = personalInfoCount >= 1 || violentThreatCount >= 1 || strongInternalRepetitionCount >= 1;
+    const isCritical = personalInfoCount >= 1 || violentThreatCount >= 1;
     const matchedRules = reasons.length;
     score = Math.min(100, score);
     return {
@@ -3383,7 +3379,11 @@
 
   function analyzeInternalRepetition(text) {
     const compact = cleanText(text).replace(/\s+/g, "");
-    if (compact.length < MASS_REPEAT_MIN_LENGTH) {
+    const lexical = compact
+      .replace(/\[emote:[^\]]+\]/gi, "")
+      .replace(/\p{Extended_Pictographic}+/gu, "");
+    const target = lexical || compact;
+    if (target.length < MASS_REPEAT_MIN_LENGTH) {
       return {
         moderate: false,
         strong: false,
@@ -3394,17 +3394,17 @@
 
     let bestCoverage = 0;
     let maxOccurrences = 1;
-    const maxPhraseLength = Math.min(24, Math.floor(compact.length / 2));
-    const maxStart = Math.max(1, Math.min(64, compact.length - 4));
+    const maxPhraseLength = Math.min(24, Math.floor(target.length / 2));
+    const maxStart = Math.max(1, Math.min(64, target.length - 4));
 
     for (let start = 0; start < maxStart; start += 1) {
       for (let length = 4; length <= maxPhraseLength; length += 1) {
-        if (start + length > compact.length) break;
-        const phrase = compact.slice(start, start + length);
+        if (start + length > target.length) break;
+        const phrase = target.slice(start, start + length);
         if (!phrase.trim()) continue;
         if (/^(.)\1+$/u.test(phrase)) continue;
 
-        const count = countNonOverlappingOccurrences(compact, phrase);
+        const count = countNonOverlappingOccurrences(target, phrase);
         if (count < 3) continue;
 
         const coverage = phrase.length * count;
@@ -3413,8 +3413,8 @@
       }
     }
 
-    const ratio = compact.length > 0 ? bestCoverage / compact.length : 0;
-    const strong = ratio >= 0.68 || (maxOccurrences >= 4 && bestCoverage >= Math.min(120, Math.floor(compact.length * 0.6)));
+    const ratio = target.length > 0 ? bestCoverage / target.length : 0;
+    const strong = ratio >= 0.74 || (maxOccurrences >= 5 && bestCoverage >= Math.min(140, Math.floor(target.length * 0.68)));
     const moderate = !strong && ratio >= 0.48 && maxOccurrences >= 3;
 
     return {

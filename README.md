@@ -59,14 +59,14 @@ EdgeとBraveもChromium系ブラウザのため、未パッケージ拡張機能
 - 「固定」を押すとポップアップを固定できます。
 - 固定ポップアップはヘッダー部分をドラッグして移動できます。
 - 閉じるボタンで固定ポップアップを閉じられます。
-- 拡張機能アイコンの数字は、現在のKickタブでドクロ判定されたアカウント数です。
+- 拡張機能アイコンの数字は、現在のKickタブで検出アイコン判定されたアカウント数です。
 - 拡張機能アイコンをクリックすると検出一覧と設定を表示します。
 - 検出一覧のアカウント名をクリックすると、そのKickアカウントページを新規タブで開きます。
 - 検出一覧の内容部分をクリックすると、そのアカウントの履歴ポップアップを固定します。
 - 検出一覧の`クリア`を押すと、現在のKickタブの検出一覧とバッジを消します。
 - 検出時の動作は`通知だけ`、`一時表示`、`自動固定`、`オフ`から選べます。
 - ウォッチリストに登録したIDがコメントすると検出一覧へ表示します。
-- 無視リストに登録したIDはドクロ判定、自動表示、自動固定の対象外になります。
+- 無視リストに登録したIDは検出アイコン判定、自動表示、自動固定の対象外になります。
 - 配信者リストに登録された配信者IDがコメントすると検出します。
 - 配信者リストがONの場合、ログイン中のKickページでフォロー中チャンネルを自動同期します。
 - フォロー中APIで取得できない場合は、ページ上に表示されているフォロー中欄を補助的に読み取ります。自動読み込みに失敗した場合は詳細設定内に理由を表示します。
@@ -134,10 +134,10 @@ window.__KICK_CHAT_HISTORY_HOVER__.setModerationActionsEnabled(false)
 
 - このプロジェクトが管理する外部サーバーは使いません。
 - 取得したチャット履歴は外部サーバーへ送信しません。
-- ドクロ判定されたアカウント一覧も外部サーバーへ送信しません。
-- ドクロ判定一覧はKickタブと拡張機能の内部メモリ上に保持され、永続保存はしません。
+- 検出アイコン判定されたアカウント一覧も外部サーバーへ送信しません。
+- 検出アイコン判定一覧はKickタブと拡張機能の内部メモリ上に保持され、永続保存はしません。
 - `activeTab`権限は、拡張機能アイコンをクリックした時に現在のKickタブから検出一覧を取得するために使います。
-- `storage`権限は、ドクロ判定時の動作、ウォッチリスト、無視リスト、配信者リストの設定保存に使います。
+- `storage`権限は、検出アイコン判定時の動作、ウォッチリスト、無視リスト、配信者リストの設定保存に使います。
 - ページを開いている間だけKickページ側の`localStorage`へ一時保存し、ページを閉じる時に削除します。
 - 履歴補完、投稿時刻補正、固定中ユーザーの過去補完、フォロー中チャンネルの自動同期のため、KickのAPIへ通信する場合があります。
 - ユーザーごとの履歴は設定された最大件数までに制限されます。
@@ -230,7 +230,7 @@ Edge and Brave support unpacked Chromium extensions.
 - Click `Clear` in the popup to clear the detected list and badge for the current Kick tab.
 - Choose the detection action from `Notify only`, `Temporary popup`, `Auto-pin`, or `Off`.
 - Add IDs to the watchlist to detect comments from those accounts.
-- Add IDs to the ignore list to exclude them from skull detection and automatic alerts.
+- Add IDs to the ignore list to exclude them from detection-icon checks and automatic alerts.
 - Add broadcaster IDs to the broadcaster list to detect comments from those accounts.
 - When the broadcaster list is enabled, followed channels are synced automatically on logged-in Kick pages.
 - If the followed-channel API cannot be read, the extension falls back to the visible following section on the page. Failed sync attempts show a reason in settings.

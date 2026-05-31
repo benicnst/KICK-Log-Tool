@@ -157,8 +157,8 @@
 .kch-popover__mod,
 .kch-popover__pin,
 .kch-popover__close {
-  height: 24px;
-  min-width: 24px;
+  height: 28px;
+  min-width: 28px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 6px;
   background: rgba(255, 255, 255, 0.06);
@@ -204,17 +204,15 @@
 }
 
 .kch-popover__pin svg {
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
+  transform: rotate(-28deg);
+  transform-origin: center;
   overflow: visible;
 }
 
 .kch-popover__pin-fill {
   fill: currentColor;
-}
-
-.kch-popover__pin-highlight {
-  fill: rgba(255, 255, 255, 0.55);
 }
 
 .kch-popover__close {

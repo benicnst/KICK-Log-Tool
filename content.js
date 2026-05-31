@@ -2875,6 +2875,7 @@
       broadcasterList: merged
     });
     await writeExtensionStorage(SETTINGS_STORAGE_KEY, userSettings);
+    reevaluateListedUsersFromHistory();
     return {
       addedCount: Math.max(0, merged.length - beforeCount),
       listCount: merged.length
@@ -3766,6 +3767,7 @@
 
         userSettings = normalizeSettings(changes[SETTINGS_STORAGE_KEY].newValue);
         applySettingsToDetectedUsers();
+        reevaluateListedUsersFromHistory();
         refreshAllPopovers();
         scheduleFollowedChannelsSync(1000);
       });
@@ -3840,6 +3842,35 @@
     }
 
     if (changed) sendSuspiciousUsersReport();
+  }
+
+  function reevaluateListedUsersFromHistory() {
+    if (getAlertAction() === "off") return;
+    if (!userSettings.watchlistEnabled && !userSettings.broadcasterListEnabled) return;
+
+    let changed = false;
+    for (const [key, history] of userHistory.entries()) {
+      if (!history?.displayName || !Array.isArray(history.messages) || history.messages.length === 0) continue;
+      if (isIgnoredUser(key)) continue;
+
+      const reasons = [];
+      if (isWatchlistedUser(key)) reasons.push("ウォッチリスト");
+      if (isBroadcasterListedUser(key)) reasons.push("配信者リスト");
+      if (!reasons.length) continue;
+
+      const before = suspiciousUsers.get(key);
+      rememberDetectedUser(key, history.displayName, reasons, history.messages);
+      const after = suspiciousUsers.get(key);
+      if (!before || !after) {
+        changed = true;
+        continue;
+      }
+      if (before.lastDetectedAt !== after.lastDetectedAt) changed = true;
+    }
+
+    if (changed) {
+      sendSuspiciousUsersReport();
+    }
   }
 
   function getEnabledDetectionReasons(reasons) {
@@ -4650,6 +4681,7 @@
   installSettingsListener();
   installRealtimeWsBridge();
   loadSettings().finally(() => initializeStreamContext()).finally(() => loadHistory()).finally(() => {
+    reevaluateListedUsersFromHistory();
     scanPage();
     scheduleFollowedChannelsSync(1500);
     scanInterval = window.setInterval(periodicRefresh, 2000);

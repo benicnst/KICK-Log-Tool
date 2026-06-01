@@ -3,6 +3,7 @@
 
   const MAX_MESSAGES = 20;
   const MAX_USERS = 250;
+  const MAX_STREAM_CACHE_MESSAGES = 20000;
   const SAVE_DELAY_MS = 700;
   const API_WINDOW_MS = 60 * 1000;
   const MAX_API_WINDOWS_PER_USER = 240;
@@ -76,6 +77,8 @@
   ];
 
   const userHistory = new Map();
+  const streamMessageCacheByUser = new Map();
+  const streamMessageCacheQueue = [];
   const pinnedCards = new Map();
   const autoPinnedUsers = new Set();
   const autoPinDismissedUsers = new Set();
@@ -1080,6 +1083,13 @@
         source: messageSource,
         timestampKind: resolvedTimestampKind
       });
+      cacheStreamMessage(key, existing.displayName, {
+        id: messageId,
+        text,
+        timestamp,
+        source: messageSource,
+        timestampKind: resolvedTimestampKind
+      });
     } else {
       incrementCounter(sourceDedupedCounts, sourceKey);
       noteSkipReason(`duplicate:${sourceKey}`);
@@ -1119,6 +1129,113 @@
     }
     trackCoordinatedSpamCandidate(key, existing.displayName, text, timestamp, messageSource, resolvedTimestampKind, !duplicate);
     return !duplicate;
+  }
+
+  function shouldCacheStreamMessage(source) {
+    const value = String(source || "");
+    return value.startsWith("realtime") || value.startsWith("dom") || value.startsWith("observed");
+  }
+
+  function buildCacheMessageKey(key, message) {
+    const id = cleanText(message?.id || "");
+    if (id) return `id:${id}`;
+    return `k:${key}|t:${Number(message?.timestamp) || 0}|s:${cleanText(message?.source || "")}|m:${cleanText(message?.text || "")}`;
+  }
+
+  function cacheStreamMessage(key, displayName, message) {
+    if (!key || !message?.text || !shouldCacheStreamMessage(message.source)) return;
+
+    const cacheKey = buildCacheMessageKey(key, message);
+    const userCache = streamMessageCacheByUser.get(key) || {
+      displayName,
+      keys: new Set(),
+      messages: []
+    };
+    userCache.displayName = displayName || userCache.displayName || key;
+    if (userCache.keys.has(cacheKey)) return;
+
+    userCache.keys.add(cacheKey);
+    userCache.messages.push({
+      cacheKey,
+      id: message.id || "",
+      text: message.text,
+      timestamp: Number(message.timestamp) || Date.now(),
+      source: message.source || "observed",
+      timestampKind: normalizeTimestampKind(message.timestampKind)
+    });
+
+    streamMessageCacheByUser.set(key, userCache);
+    streamMessageCacheQueue.push({
+      key,
+      cacheKey
+    });
+
+    while (streamMessageCacheQueue.length > MAX_STREAM_CACHE_MESSAGES) {
+      const oldest = streamMessageCacheQueue.shift();
+      if (!oldest) break;
+      const bucket = streamMessageCacheByUser.get(oldest.key);
+      if (!bucket) continue;
+      if (!bucket.keys.has(oldest.cacheKey)) continue;
+      bucket.keys.delete(oldest.cacheKey);
+      const index = bucket.messages.findIndex((item) => item.cacheKey === oldest.cacheKey);
+      if (index >= 0) bucket.messages.splice(index, 1);
+      if (!bucket.messages.length) streamMessageCacheByUser.delete(oldest.key);
+    }
+  }
+
+  function getCachedMessagesForUser(key, limit = MAX_MESSAGES) {
+    const bucket = streamMessageCacheByUser.get(key);
+    if (!bucket || !Array.isArray(bucket.messages) || !bucket.messages.length) return [];
+    const sorted = bucket.messages
+      .slice()
+      .sort((a, b) => Number(b.timestamp || 0) - Number(a.timestamp || 0));
+    return sorted.slice(0, Math.max(1, Number(limit) || MAX_MESSAGES)).map((message) => ({
+      id: message.id || "",
+      text: message.text,
+      timestamp: Number(message.timestamp) || Date.now(),
+      source: message.source || "observed",
+      timestampKind: normalizeTimestampKind(message.timestampKind)
+    }));
+  }
+
+  function hydrateUserHistoryFromAvailableCache(username) {
+    const key = normalizeUsername(username);
+    if (!key) return false;
+
+    const existing = userHistory.get(key);
+    if (existing?.messages?.length) return false;
+
+    const cached = getCachedMessagesForUser(key, MAX_MESSAGES);
+    if (cached.length) {
+      userHistory.set(key, {
+        displayName: existing?.displayName || username,
+        messages: cached
+      });
+      scheduleSave();
+      return true;
+    }
+
+    const detected = suspiciousUsers.get(key);
+    const fallbackText = cleanText(detected?.lastMessage || "");
+    if (!fallbackText) return false;
+
+    userHistory.set(key, {
+      displayName: existing?.displayName || username,
+      messages: [{
+        id: "",
+        text: fallbackText,
+        timestamp: Number(detected?.lastCommentAt) || Number(detected?.lastDetectedAt) || Date.now(),
+        source: "detected",
+        timestampKind: "observed"
+      }]
+    });
+    scheduleSave();
+    return true;
+  }
+
+  function clearStreamMessageCache() {
+    streamMessageCacheByUser.clear();
+    streamMessageCacheQueue.length = 0;
   }
 
   function trackCoordinatedSpamCandidate(key, username, text, timestamp, messageSource, timestampKind, isNewMessage) {
@@ -1876,6 +1993,7 @@
       position: { left: 10, top: 10 },
       autoPinned: auto
     });
+    hydrateUserHistoryFromAvailableCache(username);
     attachPinnedCardEvents(card);
     renderPinnedCard(key);
     const position = getInitialPinnedPosition(card, index, auto);
@@ -4042,6 +4160,7 @@
     hidePopover();
     closeAllPinnedCards();
     userHistory.clear();
+    clearStreamMessageCache();
     apiWindowCache.clear();
     userBackfillState.clear();
     pendingTimestampCorrections.clear();
@@ -4788,6 +4907,7 @@
     followedChannelsSyncRetryCount = 0;
     timestampCorrectionTimer = 0;
     clearSavedHistory();
+    clearStreamMessageCache();
     if (scanInterval) window.clearInterval(scanInterval);
     if (pinnedApiInterval) window.clearInterval(pinnedApiInterval);
     pendingTimestampCorrections.clear();

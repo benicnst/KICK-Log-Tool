@@ -215,15 +215,13 @@
     }
 
     async function fetchAndRender() {
-      let report = null;
-      try {
-        const response = await sendTabMessage(activeTabId, { type: GET_CONTENT_REPORT_TYPE });
-        report = response?.report || null;
-      } catch (_error) {
-        const response = await sendRuntimeMessage({ type: GET_BACKGROUND_REPORT_TYPE, tabId: activeTabId });
-        report = response?.report || null;
-      }
-      renderReport(report || createEmptyReport());
+      const [contentResult, backgroundResult] = await Promise.allSettled([
+        sendTabMessage(activeTabId, { type: GET_CONTENT_REPORT_TYPE }),
+        sendRuntimeMessage({ type: GET_BACKGROUND_REPORT_TYPE, tabId: activeTabId })
+      ]);
+      const contentReport = contentResult.status === "fulfilled" ? contentResult.value?.report : null;
+      const backgroundReport = backgroundResult.status === "fulfilled" ? backgroundResult.value?.report : null;
+      renderReport(mergeReports(contentReport, backgroundReport));
     }
 
     await fetchAndRender();
@@ -234,11 +232,10 @@
     if (!activeTabId) return;
 
     clearButton.disabled = true;
-    try {
-      await sendTabMessage(activeTabId, { type: CLEAR_CONTENT_REPORT_TYPE });
-    } catch (_error) {
-      await sendRuntimeMessage({ type: CLEAR_BACKGROUND_REPORT_TYPE, tabId: activeTabId });
-    }
+    await Promise.allSettled([
+      sendTabMessage(activeTabId, { type: CLEAR_CONTENT_REPORT_TYPE }),
+      sendRuntimeMessage({ type: CLEAR_BACKGROUND_REPORT_TYPE, tabId: activeTabId })
+    ]);
 
     renderReport(createEmptyReport());
   }
@@ -399,7 +396,7 @@
     if (tab === 'broadcaster') return reasons.includes('配信者リスト');
     if (tab === 'watch') return reasons.includes('ウォッチリスト');
     const isBotReason = (r) => /連投|件以上|コメント|間隔|反復|絵文字|スタンプ|BOT|URL|大量反復|同一文/.test(r);
-    if (tab === 'bot') return !reasons.includes('配信者リスト') && !reasons.includes('ウォッチリスト') && reasons.some(isBotReason);
+    if (tab === 'bot') return reasons.some(isBotReason);
     if (tab === 'other') return !reasons.includes('配信者リスト') && !reasons.includes('ウォッチリスト') && !reasons.some(isBotReason);
     return !reasons.includes('配信者リスト') && !reasons.includes('ウォッチリスト');
   }
@@ -490,6 +487,94 @@
       pageUrl: "",
       updatedAt: Date.now(),
       users: []
+    };
+  }
+
+  function mergeReports(contentReport, backgroundReport) {
+    const primary = normalizeReport(contentReport);
+    const secondary = normalizeReport(backgroundReport);
+    if (shouldAvoidCrossChannelMerge(primary, secondary)) {
+      return Number(primary.updatedAt || 0) >= Number(secondary.updatedAt || 0)
+        ? primary
+        : secondary;
+    }
+    const merged = new Map();
+
+    for (const user of [...secondary.users, ...primary.users]) {
+      const key = normalizeListUsername(user.username);
+      if (!key) continue;
+
+      const existing = merged.get(key);
+      if (!existing) {
+        merged.set(key, {
+          ...user,
+          reasons: [...new Set(Array.isArray(user.reasons) ? user.reasons : [])]
+        });
+        continue;
+      }
+
+      const reasonSet = new Set([
+        ...(Array.isArray(existing.reasons) ? existing.reasons : []),
+        ...(Array.isArray(user.reasons) ? user.reasons : [])
+      ]);
+      const newer = Number(user.lastDetectedAt || 0) >= Number(existing.lastDetectedAt || 0) ? user : existing;
+
+      merged.set(key, {
+        ...existing,
+        ...newer,
+        reasons: [...reasonSet],
+        riskScore: Math.max(Number(existing.riskScore) || 0, Number(user.riskScore) || 0),
+        riskRuleCount: Math.max(Number(existing.riskRuleCount) || 0, Number(user.riskRuleCount) || 0),
+        messageCount: Math.max(Number(existing.messageCount) || 0, Number(user.messageCount) || 0),
+        avatarUrl: user.avatarUrl || existing.avatarUrl || "",
+        profileUrl: user.profileUrl || existing.profileUrl || getProfileUrl(user.username || existing.username)
+      });
+    }
+
+    const chosenMeta = Number(primary.updatedAt || 0) >= Number(secondary.updatedAt || 0) ? primary : secondary;
+    return {
+      channelSlug: chosenMeta.channelSlug || "",
+      pageUrl: chosenMeta.pageUrl || "",
+      updatedAt: Math.max(Number(primary.updatedAt) || 0, Number(secondary.updatedAt) || 0, Date.now()),
+      users: [...merged.values()].sort((a, b) => Number(b.lastDetectedAt || 0) - Number(a.lastDetectedAt || 0))
+    };
+  }
+
+  function shouldAvoidCrossChannelMerge(primary, secondary) {
+    const a = String(primary.channelSlug || "").toLowerCase();
+    const b = String(secondary.channelSlug || "").toLowerCase();
+    if (!a || !b) return false;
+    return a !== b;
+  }
+
+  function normalizeReport(report) {
+    if (!report || typeof report !== "object") return createEmptyReport();
+
+    const users = Array.isArray(report.users)
+      ? report.users
+        .filter((user) => user && user.username)
+        .map((user) => ({
+          username: String(user.username || ""),
+          profileUrl: String(user.profileUrl || getProfileUrl(user.username || "")),
+          avatarUrl: String(user.avatarUrl || ""),
+          detectionCategory: String(user.detectionCategory || ""),
+          reasons: Array.isArray(user.reasons) ? user.reasons.map(String).slice(0, 12) : [],
+          riskScore: Number(user.riskScore) || 0,
+          riskRuleCount: Number(user.riskRuleCount) || 0,
+          riskCritical: Boolean(user.riskCritical),
+          firstDetectedAt: Number(user.firstDetectedAt) || 0,
+          lastDetectedAt: Number(user.lastDetectedAt) || 0,
+          lastCommentAt: Number(user.lastCommentAt) || 0,
+          messageCount: Number(user.messageCount) || 0,
+          lastMessage: String(user.lastMessage || "").slice(0, 180)
+        }))
+      : [];
+
+    return {
+      channelSlug: String(report.channelSlug || ""),
+      pageUrl: String(report.pageUrl || ""),
+      updatedAt: Number(report.updatedAt) || 0,
+      users
     };
   }
 

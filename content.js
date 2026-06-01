@@ -1121,7 +1121,7 @@
     pruneUsers();
     scheduleSave();
     if (!duplicate || isTrustedPostedMessageSource(messageSource)) refreshActivePopover(key);
-    if (!duplicate) {
+    if (!duplicate || !suspiciousUsers.has(key)) {
       handleListedUserCandidate(key, existing.displayName, messageSource);
     }
     if (shouldRunSuspiciousEvaluation(key, messageSource, resolvedTimestampKind, !duplicate)) {

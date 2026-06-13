@@ -217,7 +217,7 @@
   margin-left: 1px;
   margin-right: 1px;
   color: #53fc18;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 950;
 }
 
@@ -241,14 +241,14 @@
 .kch-chat-dashboard__active-label {
   margin-left: 1px;
   color: #c9d1d9;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 800;
 }
 
 .kch-chat-dashboard__detected {
   margin-left: 9px;
   color: #d7dde3;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 850;
 }
 

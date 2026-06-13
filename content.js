@@ -24,8 +24,8 @@
   const FOLLOWED_CHANNELS_MAX_PAGES = 30;
   const FOLLOWED_CHANNELS_PAGE_SIZE = 100;
   const MAX_BROADCASTER_LIST_USERS = 500;
-  const PINNED_Z_INDEX_BASE = 2147483200;
-  const PINNED_Z_INDEX_MAX = 2147483600;
+  const PINNED_Z_INDEX_BASE = 2147483600;
+  const PINNED_Z_INDEX_MAX = 2147483647;
   const INITIAL_API_LOOKBACK_MINUTES = 60;
   const INITIAL_API_BACKFILL_MAX_WINDOWS = 6;
   const INITIAL_API_BACKFILL_MAX_PAGES = 40;
@@ -3152,9 +3152,42 @@
   function createPopover() {
     const popover = document.createElement("div");
     popover.className = "kch-popover";
+    popover.setAttribute("popover", "manual");
     popover.hidden = true;
     document.documentElement.appendChild(popover);
     return popover;
+  }
+
+  function elevatePopoverLayer(element) {
+    if (!element || !document.documentElement.contains(element)) return;
+    if (element.parentElement !== document.documentElement) {
+      document.documentElement.appendChild(element);
+    }
+    if (!element.hasAttribute("popover")) {
+      element.setAttribute("popover", "manual");
+    }
+    element.hidden = false;
+
+    if (typeof element.showPopover !== "function") return;
+    try {
+      if (element.matches?.(":popover-open")) {
+        element.hidePopover?.();
+      }
+      element.showPopover();
+    } catch (_error) {
+      // Older Chrome builds or transient states can reject top-layer promotion.
+    }
+  }
+
+  function lowerPopoverLayer(element) {
+    if (!element || typeof element.hidePopover !== "function") return;
+    try {
+      if (element.matches?.(":popover-open")) {
+        element.hidePopover();
+      }
+    } catch (_error) {
+      // Keep normal fixed positioning fallback.
+    }
   }
 
   function createIngestionStatus() {
@@ -3245,7 +3278,7 @@
 
   function renderPopover(username, anchor) {
     renderPopoverContent(popover, username, false);
-    popover.hidden = false;
+    elevatePopoverLayer(popover);
     popoverShownAt = Date.now();
     rememberActiveGeometry();
     positionPopover(anchor);
@@ -3456,9 +3489,19 @@
     return { left, top, right, bottom };
   }
 
-  function setPopoverPosition(left, top) {
+  function getViewportPopoverSafeArea() {
+    const viewportMargin = 10;
+    return {
+      left: viewportMargin,
+      top: viewportMargin,
+      right: window.innerWidth - viewportMargin,
+      bottom: window.innerHeight - viewportMargin
+    };
+  }
+
+  function setPopoverPosition(left, top, safeArea = getPopoverSafeArea()) {
     const rect = popover.getBoundingClientRect();
-    const safe = getPopoverSafeArea();
+    const safe = safeArea;
     const maxLeft = Math.max(safe.left, safe.right - rect.width);
     const maxTop = Math.max(safe.top, safe.bottom - rect.height);
     const clampedLeft = Math.min(Math.max(safe.left, left), maxLeft);
@@ -3483,6 +3526,7 @@
     activeAnchorRect = null;
     isPointerOverPopover = false;
     hoverDragState = null;
+    lowerPopoverLayer(popover);
     popover.hidden = true;
   }
 
@@ -3639,6 +3683,7 @@
     pinnedCards.get(key).position = position;
     bringPinnedCardToFront(key);
     setElementPosition(card, position.left, position.top, key);
+    elevatePopoverLayer(card);
     card.style.visibility = "";
     if (auto) {
       card.classList.add("kch-popover--auto-pinned");
@@ -5756,6 +5801,7 @@
     const key = normalizeUsername(usernameOrKey);
     const card = pinnedCards.get(key);
     if (!card) return;
+    lowerPopoverLayer(card.element);
     card.element.remove();
     pinnedCards.delete(key);
     autoPinnedUsers.delete(key);
@@ -5764,6 +5810,7 @@
 
   function closeAllPinnedCards() {
     for (const card of pinnedCards.values()) {
+      lowerPopoverLayer(card.element);
       card.element.remove();
     }
     pinnedCards.clear();
@@ -5841,6 +5888,7 @@
 
     nextPinnedZIndex += 1;
     card.element.style.zIndex = String(nextPinnedZIndex);
+    elevatePopoverLayer(card.element);
   }
 
   function normalizePinnedCardZIndexes(activeKey = "") {
@@ -6985,7 +7033,6 @@
     if (popover.classList.contains("kch-popover--pinned")) return;
     if (!(event.target instanceof Element)) return;
     if (event.target.closest("button")) return;
-    if (!event.target.closest(".kch-popover__header")) return;
 
     const rect = popover.getBoundingClientRect();
     hoverDragState = {
@@ -7004,7 +7051,8 @@
     if (!hoverDragState || hoverDragState.pointerId !== event.pointerId) return;
     setPopoverPosition(
       event.clientX - hoverDragState.offsetX,
-      event.clientY - hoverDragState.offsetY
+      event.clientY - hoverDragState.offsetY,
+      getViewportPopoverSafeArea()
     );
     event.preventDefault();
   });

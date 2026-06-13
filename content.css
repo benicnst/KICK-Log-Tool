@@ -1,8 +1,10 @@
 .kch-popover {
   position: fixed;
+  inset: auto;
   z-index: 2147483647;
   width: min(254px, calc(100vw - 24px));
   max-height: min(330px, calc(100vh - 24px));
+  margin: 0;
   overflow: hidden;
   border: 1px solid rgba(83, 252, 24, 0.45);
   border-radius: 8px;
@@ -23,7 +25,7 @@
   position: fixed;
   right: 14px;
   bottom: 72px;
-  z-index: 2147483646;
+  z-index: 2147483000;
   max-width: min(320px, calc(100vw - 28px));
   padding: 8px 10px;
   border: 1px solid rgba(83, 252, 24, 0.42);
@@ -274,6 +276,14 @@
 
 .kch-popover .kch-popover__header {
   cursor: move;
+}
+
+.kch-popover:not(.kch-popover--pinned) {
+  cursor: move;
+}
+
+.kch-popover button {
+  cursor: pointer;
 }
 
 .kch-popover--pinned {

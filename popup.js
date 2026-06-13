@@ -72,7 +72,6 @@
       sensitivityStrong: "強め",
       botSensitivityHint: "BOT/連投の検知しやすさを調整します。",
       otherSensitivityHint: "脅迫・暴言・個人情報などの検知しやすさを調整します。",
-      sensitivityPrivacyHint: "検知条件の詳細は表示せず、強さだけを調整します。",
       other: "その他",
       advancedSettings: "詳細設定",
       settingsSubtitle: "対象リストと通知設定",
@@ -153,7 +152,6 @@
       sensitivityStrong: "Strong",
       botSensitivityHint: "Adjust how easily bot/spam patterns are detected.",
       otherSensitivityHint: "Adjust how easily threats, abuse, and personal info are detected.",
-      sensitivityPrivacyHint: "Only detection strength is shown; detailed rules are not exposed.",
       other: "Other",
       advancedSettings: "Advanced Settings",
       settingsSubtitle: "Lists and notification settings",
@@ -333,7 +331,6 @@
     setText("[for='other-detection-sensitivity'] > span", t("other"));
     setSensitivityOptionsText("#bot-detection-sensitivity");
     setSensitivityOptionsText("#other-detection-sensitivity");
-    setText(".klt-popup__hint--sensitivity", t("sensitivityPrivacyHint"));
     setText("[data-list-setting='watchlist'] .klt-popup__label span:last-child", t("watchlist"));
     setText("[data-list-setting='watchlist'] .klt-popup__hint", t("watchlistHint"));
     setText("#watchlist-form button span:last-child", t("add"));

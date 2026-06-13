@@ -272,7 +272,7 @@
   background: #171b20;
 }
 
-.kch-popover--pinned .kch-popover__header {
+.kch-popover .kch-popover__header {
   cursor: move;
 }
 

@@ -298,6 +298,7 @@
   let routeResetInProgress = false;
   let historyFetchBridgeSequence = 0;
   let pinnedDragState = null;
+  let hoverDragState = null;
   let pinnedResizeState = null;
   let popoverShownAt = 0;
   let suspiciousReportTimer = 0;
@@ -2099,8 +2100,8 @@
 
   function getChatStatusLevel(messageCount, userCount, detectionCount, highRiskCount) {
     if (messageCount <= 0 && userCount <= 0 && detectionCount <= 0 && highRiskCount <= 0) return "checking";
-    if (highRiskCount >= 3 || detectionCount >= 8) return "rough";
-    if (highRiskCount >= 2 || detectionCount >= 4) return "caution";
+    if (highRiskCount >= 3) return "rough";
+    if (highRiskCount >= 2) return "caution";
     if (messageCount >= 80 || userCount >= 28) return "active";
     if (messageCount >= 16 || userCount >= 8) return "normal";
     return "quiet";
@@ -3168,7 +3169,7 @@
   const ingestionStatus = createIngestionStatus();
 
   window.__KICK_CHAT_HISTORY_HOVER__ = {
-    version: "2.58.9",
+    version: "2.59.0",
     getChatRootCount: () => getChatRoots().length,
     getKnownUsers: () => {
       if (canonicalUserIndex.size) {
@@ -3481,6 +3482,7 @@
     activeRowRect = null;
     activeAnchorRect = null;
     isPointerOverPopover = false;
+    hoverDragState = null;
     popover.hidden = true;
   }
 
@@ -3498,7 +3500,7 @@
   }
 
   function closeStaleHoverPopover() {
-    if (!activeRow || popover.hidden || isPointerOverPopover) return;
+    if (!activeRow || popover.hidden || isPointerOverPopover || hoverDragState) return;
     if (isTemporaryPopoverActive) return;
 
     if (isPointerInsideActiveHoverZone()) return;
@@ -3630,6 +3632,9 @@
     renderPinnedCard(key, {
       restoreScrollTop: initialScrollTop
     });
+    const fittedHeight = getFittedPinnedHeight(card, auto);
+    card.style.height = `${fittedHeight}px`;
+    pinnedCards.get(key).height = fittedHeight;
     const position = getInitialPinnedPosition(card, index, auto);
     pinnedCards.get(key).position = position;
     bringPinnedCardToFront(key);
@@ -5784,6 +5789,18 @@
     return clampPinnedCardHeight(height);
   }
 
+  function getFittedPinnedHeight(card, auto) {
+    const header = card.querySelector(".kch-popover__header");
+    const list = card.querySelector(".kch-popover__list");
+    const handle = card.querySelector(".kch-popover__resize-handle");
+    const headerHeight = header?.getBoundingClientRect?.().height || 43;
+    const handleHeight = handle?.getBoundingClientRect?.().height || 16;
+    const listContentHeight = list?.scrollHeight || 72;
+    const maxListHeight = auto ? 260 : 204;
+    const height = headerHeight + Math.min(listContentHeight, maxListHeight) + handleHeight;
+    return clampPinnedCardHeight(height, card.getBoundingClientRect().top);
+  }
+
   function getInitialPinnedScrollTop(auto) {
     if (auto || popover.hidden) return null;
     const list = popover.querySelector(".kch-popover__list");
@@ -5885,6 +5902,7 @@
     activeUsername = "";
     activeAnchor = null;
     isPointerOverPopover = false;
+    hoverDragState = null;
     popover.hidden = true;
   }
 
@@ -6295,6 +6313,11 @@
       const emoteSpamStrength =
         emoteSpamWeight >= 24 ? "strong" : (emoteSpamWeight >= 16 ? "normal" : "weak");
       addContentRule("絵文字/スタンプ大量", emoteSpamWeight, emoteSpamStrength);
+    }
+    if (mostlyEmoteSpamCount >= 5 && hasBurstWindow(emoteSpamMessages, 5, 30000)) {
+      addTempoRule(REASON_RAPID_SPAM, 24);
+    } else if (mostlyEmoteSpamCount >= 3 && hasBurstWindow(emoteSpamMessages, 3, 10000)) {
+      addTempoRule(REASON_RAPID_SPAM, 18);
     }
 
     const internalRepetitionStats = sorted
@@ -6828,7 +6851,7 @@
   function countEmoteLikeTokens(text) {
     const value = String(text || "");
     const emojiCount = [...value].filter((char) => /\p{Extended_Pictographic}/u.test(char)).length;
-    const emotePlaceholderCount = (value.match(/\[emote\]/gi) || []).length;
+    const emotePlaceholderCount = (value.match(/\[emote(?::[^\]]+)?\]/gi) || []).length;
     const namedEmoteCount = (value.match(/:[A-Za-z0-9_.-]{2,32}:/g) || []).length;
     return emojiCount + emotePlaceholderCount + namedEmoteCount;
   }
@@ -6951,10 +6974,52 @@
   });
 
   popover.addEventListener("mouseleave", (event) => {
+    if (hoverDragState) return;
     isPointerOverPopover = false;
     const related = event.relatedTarget;
     if (related instanceof Node && activeRow?.contains(related)) return;
     scheduleHidePopover();
+  });
+
+  popover.addEventListener("pointerdown", (event) => {
+    if (popover.classList.contains("kch-popover--pinned")) return;
+    if (!(event.target instanceof Element)) return;
+    if (event.target.closest("button")) return;
+    if (!event.target.closest(".kch-popover__header")) return;
+
+    const rect = popover.getBoundingClientRect();
+    hoverDragState = {
+      pointerId: event.pointerId,
+      offsetX: event.clientX - rect.left,
+      offsetY: event.clientY - rect.top
+    };
+    isPointerOverPopover = true;
+    clearTimeout(hideTimer);
+    popover.setPointerCapture?.(event.pointerId);
+    popover.classList.add("kch-popover--dragging");
+    event.preventDefault();
+  });
+
+  popover.addEventListener("pointermove", (event) => {
+    if (!hoverDragState || hoverDragState.pointerId !== event.pointerId) return;
+    setPopoverPosition(
+      event.clientX - hoverDragState.offsetX,
+      event.clientY - hoverDragState.offsetY
+    );
+    event.preventDefault();
+  });
+
+  popover.addEventListener("pointerup", (event) => {
+    if (!hoverDragState || hoverDragState.pointerId !== event.pointerId) return;
+    hoverDragState = null;
+    popover.releasePointerCapture?.(event.pointerId);
+    popover.classList.remove("kch-popover--dragging");
+    event.preventDefault();
+  });
+
+  popover.addEventListener("pointercancel", () => {
+    hoverDragState = null;
+    popover.classList.remove("kch-popover--dragging");
   });
 
   document.addEventListener("pointermove", (event) => {

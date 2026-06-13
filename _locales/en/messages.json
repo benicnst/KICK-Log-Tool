@@ -1,0 +1,8 @@
+{
+  "extensionName": {
+    "message": "KICK Log Tool"
+  },
+  "extensionDescription": {
+    "message": "Show captured Kick chat history, pin user popups, and highlight suspicious posting patterns."
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "extensionName": {
+    "message": "KICK Log Tool"
+  },
+  "extensionDescription": {
+    "message": "Kickチャットのコメント履歴表示、ユーザーポップアップ固定、不審な投稿パターンの検出を行います。"
+  }
+}

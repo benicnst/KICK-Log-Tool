@@ -6,6 +6,7 @@
   const GET_BACKGROUND_REPORT_TYPE = "KLT_GET_SUSPICIOUS_REPORT";
   const CLEAR_BACKGROUND_REPORT_TYPE = "KLT_CLEAR_SUSPICIOUS_REPORT";
   const PIN_CONTENT_USER_TYPE = "KLT_PIN_USER";
+  const REFRESH_FOLLOWED_CHANNELS_TYPE = "KLT_REFRESH_FOLLOWED_CHANNELS";
   const SETTINGS_STORAGE_KEY = "klt:settings:v1";
   const FOLLOWED_CHANNELS_SYNC_STORAGE_KEY = "klt:followedChannelsSync:v1";
   const MAX_LIST_USERS = 200;
@@ -13,7 +14,7 @@
   const DEFAULT_MAX_PINNED_POPOVERS = 3;
   const MIN_PINNED_POPOVERS = 0;
   const MAX_PINNED_POPOVERS = 5;
-  const ALERT_ACTIONS = new Set(["notify", "temporary", "auto-pin", "off"]);
+  const ALERT_ACTIONS = new Set(["notify", "auto-pin", "off"]);
   const DEFAULT_SETTINGS = {
     alertAction: "auto-pin",
     maxPinnedPopovers: DEFAULT_MAX_PINNED_POPOVERS,
@@ -22,6 +23,9 @@
     ignorelistEnabled: true,
     broadcasterListEnabled: true,
     botDetectionEnabled: true,
+    compactDashboardEnabled: true,
+    botDetectionSensitivity: "standard",
+    otherDetectionSensitivity: "standard",
     watchlist: [],
     ignorelist: [],
     broadcasterList: []
@@ -49,8 +53,195 @@
     }
   };
 
+  const UI_LANG = getUiLanguage();
+  const TEXT = {
+    ja: {
+      checkingTarget: "対象ページを確認中...",
+      loadingDetection: "検出状況を読み込み中...",
+      clear: "クリア",
+      settings: "設定",
+      back: "戻る",
+      tabsLabel: "検出タブ",
+      broadcaster: "配信者",
+      watch: "ウォッチ",
+      bot: "BOT/連投",
+      botSetting: "BOT/連投/その他",
+      sensitivity: "検知感度",
+      sensitivityConservative: "控えめ",
+      sensitivityStandard: "標準",
+      sensitivityStrong: "強め",
+      botSensitivityHint: "BOT/連投の検知しやすさを調整します。",
+      otherSensitivityHint: "脅迫・暴言・個人情報などの検知しやすさを調整します。",
+      sensitivityPrivacyHint: "検知条件の詳細は表示せず、強さだけを調整します。",
+      other: "その他",
+      advancedSettings: "詳細設定",
+      settingsSubtitle: "対象リストと通知設定",
+      alertAction: "検出時の動作",
+      alertActionLabel: "リスト検出時の動作",
+      notify: "通知",
+      autoPopup: "自動ポップアップ",
+      off: "オフ",
+      autoPopupHint: "検出時の動作が自動ポップアップの場合に使います。",
+      maxPeople: "最大人数",
+      maxAutoPopups: "自動ポップアップする最大数",
+      duration: "表示時間",
+      popupDuration: "ポップアップ表示時間",
+      sec: "秒",
+      broadcasterHint: "配信者のコメントを検出します。",
+      reloadFollowed: "再読み込み",
+      botHint: "不審な投稿パターンを自動検出します。",
+      dashboard: "チャット上部ダッシュボード",
+      dashboardHint: "チャット表示欄の上部に、最小限の状況メーターを表示します。",
+      watchlist: "ウォッチリスト",
+      watchlistHint: "登録IDがコメントしたら検出します。",
+      ignore: "無視",
+      ignoreHint: "登録IDは自動検出・自動表示から除外します。",
+      add: "追加",
+      noTarget: "対象ページなし",
+      noActiveTab: "アクティブなタブを取得できませんでした。",
+      targetKick: "対象: Kickページ",
+      target: "対象: {channel}",
+      detectedCount: "{target}　検出: {count}件",
+      chatStatusChecking: "判定中",
+      chatStatusQuiet: "静か",
+      chatStatusNormal: "通常",
+      chatStatusActive: "盛り上がり中",
+      chatStatusCaution: "荒れそう",
+      chatStatusRough: "荒れ気味",
+      recentWindow: "直近{minutes}分",
+      empty: "検出されたアカウントはまだありません。",
+      pinTitle: "{username} を固定表示",
+      profileTitle: "{username} のKickページを開く",
+      popupPinTitle: "{username} をポップアップ固定",
+      timeJustNow: "たった今",
+      timeMinutesAgo: "{count}分前",
+      timeHoursAgo: "{count}時間前",
+      timeDaysAgo: "{count}日前",
+      fixed: "固定",
+      pinned: "{username} を固定しました",
+      cannotPin: "固定できませんでした",
+      reloadKick: "Kickページを再読み込みしてください。",
+      score: "score {score} ({rules}条件)",
+      detected: "検出",
+      threat: "脅迫",
+      abuse: "攻撃的暴言",
+      privacy: "個人情報",
+      removeTitle: "{username} を削除",
+      broadcasterOff: "配信者リストがOFFです。",
+      savedList: "保存済みリスト: {count}件 / 再読み込み後に同期件数を表示{source}",
+      autoLoaded: "自動読み込み済み: {count}{total}件{source}",
+      autoLoadFailed: "自動読み込み失敗: {reason}",
+      unknownReason: "理由不明",
+      autoLoadingCurrent: "自動読み込み中 [{username} ...... {count}件]{source}",
+      autoLoading: "フォロー中チャンネルを読み込み中...{source}",
+      idleSync: "Kickページを開くと自動読み込みします。"
+    },
+    en: {
+      checkingTarget: "Checking target page...",
+      loadingDetection: "Loading detection status...",
+      clear: "Clear",
+      settings: "Settings",
+      back: "Back",
+      tabsLabel: "Detection tabs",
+      broadcaster: "Broadcaster",
+      watch: "Watch",
+      bot: "Bot/Spam",
+      botSetting: "Bot/Spam/Other",
+      sensitivity: "Sensitivity",
+      sensitivityConservative: "Conservative",
+      sensitivityStandard: "Standard",
+      sensitivityStrong: "Strong",
+      botSensitivityHint: "Adjust how easily bot/spam patterns are detected.",
+      otherSensitivityHint: "Adjust how easily threats, abuse, and personal info are detected.",
+      sensitivityPrivacyHint: "Only detection strength is shown; detailed rules are not exposed.",
+      other: "Other",
+      advancedSettings: "Advanced Settings",
+      settingsSubtitle: "Lists and notification settings",
+      alertAction: "Detection action",
+      alertActionLabel: "List detection action",
+      notify: "Notify",
+      autoPopup: "Auto popup",
+      off: "Off",
+      autoPopupHint: "Used when the detection action is Auto popup.",
+      maxPeople: "Max",
+      maxAutoPopups: "Maximum auto popups",
+      duration: "Duration",
+      popupDuration: "Popup duration",
+      sec: " sec",
+      broadcasterHint: "Detect comments from followed/listed broadcasters.",
+      reloadFollowed: "Reload",
+      botHint: "Automatically detect suspicious posting patterns.",
+      dashboard: "Chat top dashboard",
+      dashboardHint: "Shows a compact status meter above the chat message area.",
+      watchlist: "Watchlist",
+      watchlistHint: "Detect when a registered ID comments.",
+      ignore: "Ignore",
+      ignoreHint: "Registered IDs are excluded from auto detection and auto popup.",
+      add: "Add",
+      noTarget: "No target page",
+      noActiveTab: "Could not get the active tab.",
+      targetKick: "Target: Kick page",
+      target: "Target: {channel}",
+      detectedCount: "{target}  Detected: {count}",
+      chatStatusChecking: "Checking",
+      chatStatusQuiet: "Quiet",
+      chatStatusNormal: "Normal",
+      chatStatusActive: "Active",
+      chatStatusCaution: "Getting rough",
+      chatStatusRough: "Rough",
+      recentWindow: "Last {minutes} min",
+      empty: "No detected accounts yet.",
+      pinTitle: "Pin {username}",
+      profileTitle: "Open {username}'s Kick page",
+      popupPinTitle: "Pin {username} popup",
+      timeJustNow: "just now",
+      timeMinutesAgo: "{count}m ago",
+      timeHoursAgo: "{count}h ago",
+      timeDaysAgo: "{count}d ago",
+      fixed: "Pinned",
+      pinned: "Pinned {username}",
+      cannotPin: "Could not pin",
+      reloadKick: "Reload the Kick page.",
+      score: "score {score} ({rules} rules)",
+      detected: "Detected",
+      threat: "Threat",
+      abuse: "Abusive language",
+      privacy: "Personal info",
+      removeTitle: "Remove {username}",
+      broadcasterOff: "Broadcaster list is off.",
+      savedList: "Saved list: {count} / reload to show sync count{source}",
+      autoLoaded: "Auto loaded: {count}{total}{source}",
+      autoLoadFailed: "Auto load failed: {reason}",
+      unknownReason: "Unknown reason",
+      autoLoadingCurrent: "Auto loading [{username} ...... {count}]{source}",
+      autoLoading: "Loading followed channels...{source}",
+      idleSync: "Open a Kick page to auto load."
+    }
+  };
+  const REASON_LABELS_EN = new Map([
+    ["危害/脅迫性の高い投稿", "High-risk threat-like post"],
+    ["攻撃的暴言", "Abusive language"],
+    ["殺害/危害予告らしき投稿", "Threat-like post"],
+    ["複数アカウント同一文連投", "Coordinated repeated text"],
+    ["低情報コメント連投", "Low-info repeated comments"],
+    ["ウォッチリスト", "Watchlist"],
+    ["配信者リスト", "Broadcaster list"],
+    ["同一コメントを3回以上", "Same comment 3+ times"],
+    ["同一長文コメントを2回以上", "Same long comment 2+ times"],
+    ["1秒以内に3コメント以上", "3+ comments in 1 second"],
+    ["3秒以内に5コメント以上", "5+ comments in 3 seconds"],
+    ["平均投稿間隔が2.5秒以下", "Average interval under 2.5 seconds"],
+    ["URL風コメントが多い", "Many URL-like comments"],
+    ["長文/語句の大量反復", "Long phrase repetition"],
+    ["絵文字/スタンプ大量", "Heavy emoji/sticker usage"],
+    ["単一コメント内の大量反復", "Mass repetition in one comment"],
+    ["コメント内の反復が多い", "Repeated text in comments"],
+    ["個人情報らしき投稿", "Possible personal info"]
+  ]);
+
   const summary = document.querySelector("#summary");
   const channel = document.querySelector("#channel");
+  const chatStatus = document.querySelector("#chat-status");
   const list = document.querySelector("#list");
   const clearButton = document.querySelector("#clear");
   const settingsToggle = document.querySelector("#settings-toggle");
@@ -60,7 +251,10 @@
   const settingsView = document.querySelector("#settings-view");
   const actionGroups = [...document.querySelectorAll("[data-alert-action]")];
   const maxPinnedSelect = document.querySelector("#max-pinned-popovers");
+  const botSensitivitySelect = document.querySelector("#bot-detection-sensitivity");
+  const otherSensitivitySelect = document.querySelector("#other-detection-sensitivity");
   const broadcasterSyncStatus = document.querySelector("#broadcaster-sync-status");
+  const broadcasterSyncReload = document.querySelector("#broadcaster-sync-reload");
   let activeTabId = 0;
   let activeTabUrl = "";
   let settingsVisible = false;
@@ -68,12 +262,121 @@
   let followedChannelsSyncStatus = createDefaultFollowedChannelsSyncStatus();
   let currentReport = null;
   let selectedDetectionTab = 'broadcaster';
+  let detectionTabInitialized = false;
+  applyStaticTranslations();
   bindEvents();
   init();
+
+  function getUiLanguage() {
+    const language = String(chrome?.i18n?.getUILanguage?.() || navigator.language || "en").toLowerCase();
+    return language.startsWith("ja") ? "ja" : "en";
+  }
+
+  function t(key, params = {}) {
+    const dictionary = TEXT[UI_LANG] || TEXT.en;
+    const fallback = TEXT.en[key] || TEXT.ja[key] || key;
+    return String(dictionary[key] || fallback).replace(/\{(\w+)\}/g, (_match, name) => {
+      return Object.prototype.hasOwnProperty.call(params, name) ? String(params[name]) : "";
+    });
+  }
+
+  function setText(selector, value) {
+    const element = document.querySelector(selector);
+    if (element) element.textContent = value;
+  }
+
+  function applyStaticTranslations() {
+    document.documentElement.lang = UI_LANG;
+    setText("#channel", t("checkingTarget"));
+    setText("#summary", t("loadingDetection"));
+    setText("#clear .klt-button-label", t("clear"));
+    setText("#settings-toggle .klt-button-label", t("settings"));
+    document.querySelector("#detection-tabs")?.setAttribute("aria-label", t("tabsLabel"));
+    setText("#tab-broadcaster .klt-tab-label", t("broadcaster"));
+    setText("#tab-watch .klt-tab-label", t("watch"));
+    setText("#tab-bot .klt-tab-label", t("bot"));
+    setText("#tab-other .klt-tab-label", t("other"));
+    settingsView?.setAttribute("aria-label", t("advancedSettings"));
+    setText(".klt-popup__settings-title h2 span:last-child", t("advancedSettings"));
+    setText(".klt-popup__settings-title > span", t("settingsSubtitle"));
+    document.querySelector(".klt-popup__settings--compact")?.setAttribute("aria-label", t("alertAction"));
+    setText(".klt-popup__setting--action .klt-popup__label span:last-child", t("alertAction"));
+    document.querySelector("#alert-action")?.setAttribute("aria-label", t("alertActionLabel"));
+    setText("[data-action='notify'] span:last-child", t("notify"));
+    setText("[data-action='auto-pin'] span:last-child", t("autoPopup"));
+    setText("[data-action='off'] span:last-child", t("off"));
+    const compactSettings = [...document.querySelectorAll(".klt-popup__settings--compact > .klt-popup__setting")];
+    const autoPopupSetting = compactSettings[1];
+    const autoPopupLabel = autoPopupSetting?.querySelector(".klt-popup__label span:last-child");
+    const autoPopupHint = autoPopupSetting?.querySelector(".klt-popup__hint");
+    if (autoPopupLabel) autoPopupLabel.textContent = t("autoPopup");
+    if (autoPopupHint) autoPopupHint.textContent = t("autoPopupHint");
+    const pinLabels = [...document.querySelectorAll(".klt-popup__pin-select-row .klt-popup__pin-label")];
+    if (pinLabels[0]) pinLabels[0].textContent = t("maxPeople");
+    if (pinLabels[1]) pinLabels[1].textContent = t("duration");
+    maxPinnedSelect?.setAttribute("aria-label", t("maxAutoPopups"));
+    const durationSelect = document.querySelector("#temporary-popup-duration");
+    durationSelect?.setAttribute("aria-label", t("popupDuration"));
+    for (const option of durationSelect?.querySelectorAll("option") || []) {
+      option.textContent = `${option.value}${t("sec")}`;
+    }
+    setText("[data-list-setting='broadcasterList'] .klt-popup__label span:last-child", t("broadcaster"));
+    setText("[data-list-setting='broadcasterList'] .klt-popup__hint", t("broadcasterHint"));
+    setText("#broadcaster-sync-reload span:last-child", t("reloadFollowed"));
+    setText("#broadcaster-sync-status", t("loadingDetection"));
+    setText("#compact-dashboard-label", t("dashboard"));
+    setText("#compact-dashboard-hint", t("dashboardHint"));
+    setText("[data-list-setting='botDetection'] .klt-popup__label span:last-child", t("botSetting"));
+    setText("[data-list-setting='botDetection'] .klt-popup__hint", t("botHint"));
+    document.querySelector(".klt-popup__sensitivity-grid")?.setAttribute("aria-label", t("sensitivity"));
+    setText("[for='bot-detection-sensitivity'] > span", t("bot"));
+    setText("[for='other-detection-sensitivity'] > span", t("other"));
+    setSensitivityOptionsText("#bot-detection-sensitivity");
+    setSensitivityOptionsText("#other-detection-sensitivity");
+    setText(".klt-popup__hint--sensitivity", t("sensitivityPrivacyHint"));
+    setText("[data-list-setting='watchlist'] .klt-popup__label span:last-child", t("watchlist"));
+    setText("[data-list-setting='watchlist'] .klt-popup__hint", t("watchlistHint"));
+    setText("#watchlist-form button span:last-child", t("add"));
+    setText("[data-list-setting='ignorelist'] .klt-popup__label span:last-child", t("ignore"));
+    setText("[data-list-setting='ignorelist'] .klt-popup__hint", t("ignoreHint"));
+    setText("#ignorelist-form button span:last-child", t("add"));
+  }
+
+  function setSensitivityOptionsText(selector) {
+    const select = document.querySelector(selector);
+    if (!select) return;
+    const labels = {
+      low: t("sensitivityConservative"),
+      standard: t("sensitivityStandard"),
+      high: t("sensitivityStrong")
+    };
+    for (const option of select.querySelectorAll("option")) {
+      option.textContent = labels[option.value] || option.textContent;
+    }
+  }
+
+  function translateKnownStatusReason(reason) {
+    const value = String(reason || "");
+    if (UI_LANG === "ja" || !value) return value;
+    const known = new Map([
+      ["Kickページを開くと自動読み込みします。", t("idleSync")],
+      ["配信者リストがOFFです。", t("broadcasterOff")],
+      ["フォロー中チャンネルを読み込み中...", t("autoLoading", { source: "" })],
+      ["フォロー中チャンネルが見つかりませんでした。", "No followed channels found."],
+      ["現在KICKにログインされていません。", "You are not logged in to Kick."],
+      ["ログインが必要です", "Login required."],
+      ["session_tokenが見つかりません", "session_token was not found."]
+    ]);
+    if (known.has(value)) return known.get(value);
+    return value
+      .replace(/^通信エラー:\s*/i, "Network error: ")
+      .replace(/理由不明/g, t("unknownReason"));
+  }
 
   function bindEvents() {
     clearButton.addEventListener("click", clearDetectedUsers);
     settingsToggle.addEventListener("click", toggleSettingsView);
+    broadcasterSyncReload?.addEventListener("click", refreshFollowedChannels);
 
     chrome.storage.onChanged.addListener((changes, areaName) => {
       if (areaName !== "local") return;
@@ -90,14 +393,6 @@
     });
 
     list.addEventListener("click", (event) => {
-      const profileButton = event.target.closest("[data-profile-url]");
-      if (profileButton) {
-        const url = profileButton.dataset.profileUrl;
-        if (!url) return;
-        chrome.tabs.create({ url });
-        return;
-      }
-
       const pinTarget = event.target.closest("[data-pin-username]");
       if (!pinTarget) return;
       pinDetectedUser(pinTarget.dataset.pinUsername);
@@ -180,6 +475,28 @@
         botDetectionEnabled: botToggle.checked
       });
     });
+
+    const dashboardToggle = document.querySelector("#compact-dashboard-enabled");
+    dashboardToggle?.addEventListener("change", () => {
+      saveSettings({
+        ...settings,
+        compactDashboardEnabled: dashboardToggle.checked
+      });
+    });
+
+    botSensitivitySelect?.addEventListener("change", () => {
+      saveSettings({
+        ...settings,
+        botDetectionSensitivity: normalizeDetectionSensitivity(botSensitivitySelect.value)
+      });
+    });
+
+    otherSensitivitySelect?.addEventListener("change", () => {
+      saveSettings({
+        ...settings,
+        otherDetectionSensitivity: normalizeDetectionSensitivity(otherSensitivitySelect.value)
+      });
+    });
   }
 
   function toggleSettingsView() {
@@ -191,41 +508,56 @@
     mainView.hidden = visible;
     settingsView.hidden = !visible;
     settingsToggleIcon.className = `klt-icon klt-icon--${visible ? "arrow-left" : "gear"}`;
-    settingsToggleLabel.textContent = visible ? "戻る" : "設定";
+    settingsToggleLabel.textContent = visible ? t("back") : t("settings");
     settingsToggle.setAttribute("aria-pressed", String(visible));
   }
 
   async function init() {
-    const [loadedSettings, loadedSyncStatus] = await Promise.all([
-      loadSettings(),
-      loadFollowedChannelsSyncStatus()
-    ]);
-    settings = loadedSettings;
-    followedChannelsSyncStatus = loadedSyncStatus;
-    renderSettings();
-
-    const tab = await getActiveTab();
-    activeTabId = tab?.id || 0;
-    activeTabUrl = tab?.url || "";
-
-    if (!activeTabId) {
-      channel.textContent = "対象ページなし";
-      renderEmpty("アクティブなタブを取得できませんでした。");
-      return;
-    }
-
-    async function fetchAndRender() {
-      const [contentResult, backgroundResult] = await Promise.allSettled([
-        sendTabMessage(activeTabId, { type: GET_CONTENT_REPORT_TYPE }),
-        sendRuntimeMessage({ type: GET_BACKGROUND_REPORT_TYPE, tabId: activeTabId })
+    try {
+      const [loadedSettings, loadedSyncStatus] = await Promise.all([
+        loadSettings(),
+        loadFollowedChannelsSyncStatus()
       ]);
-      const contentReport = contentResult.status === "fulfilled" ? contentResult.value?.report : null;
-      const backgroundReport = backgroundResult.status === "fulfilled" ? backgroundResult.value?.report : null;
-      renderReport(mergeReports(contentReport, backgroundReport));
-    }
+      settings = loadedSettings;
+      followedChannelsSyncStatus = loadedSyncStatus;
+      renderSettings();
 
-    await fetchAndRender();
-    setInterval(fetchAndRender, 2000);
+      const tab = await getActiveTab();
+      activeTabId = tab?.id || 0;
+      activeTabUrl = tab?.url || "";
+
+      if (!activeTabId) {
+        channel.textContent = t("noTarget");
+        renderEmpty(t("noActiveTab"));
+        return;
+      }
+
+      async function fetchAndRender() {
+        try {
+          const [contentResult, backgroundResult] = await Promise.allSettled([
+            sendTabMessage(activeTabId, { type: GET_CONTENT_REPORT_TYPE }),
+            sendRuntimeMessage({ type: GET_BACKGROUND_REPORT_TYPE, tabId: activeTabId, pageUrl: activeTabUrl })
+          ]);
+          const contentReport = contentResult.status === "fulfilled" ? contentResult.value?.report : null;
+          const backgroundReport = backgroundResult.status === "fulfilled" ? backgroundResult.value?.report : null;
+          if (!contentReport && !backgroundReport) {
+            channel.textContent = t("targetKick");
+            renderEmpty(t("reloadKick"));
+            return;
+          }
+          renderReport(mergeReports(contentReport, backgroundReport));
+        } catch (_error) {
+          channel.textContent = t("targetKick");
+          renderEmpty(t("reloadKick"));
+        }
+      }
+
+      await fetchAndRender();
+      setInterval(fetchAndRender, 2000);
+    } catch (_error) {
+      channel.textContent = t("noTarget");
+      renderEmpty(t("reloadKick"));
+    }
   }
 
   async function clearDetectedUsers() {
@@ -240,6 +572,29 @@
     renderReport(createEmptyReport());
   }
 
+  async function refreshFollowedChannels() {
+    if (!activeTabId || !broadcasterSyncReload) return;
+
+    broadcasterSyncReload.disabled = true;
+    try {
+      const response = await sendTabMessage(activeTabId, { type: REFRESH_FOLLOWED_CHANNELS_TYPE });
+      if (response?.status) {
+        followedChannelsSyncStatus = normalizeFollowedChannelsSyncStatus(response.status);
+        renderFollowedChannelsSyncStatus();
+      }
+    } catch (_error) {
+      followedChannelsSyncStatus = {
+        ...followedChannelsSyncStatus,
+        state: "failed",
+        reason: t("reloadKick"),
+        updatedAt: Date.now()
+      };
+      renderFollowedChannelsSyncStatus();
+    } finally {
+      broadcasterSyncReload.disabled = false;
+    }
+  }
+
   function renderReport(report) {
     const users = Array.isArray(report.users) ? report.users : [];
     clearButton.disabled = users.length === 0;
@@ -248,40 +603,53 @@
     currentReport = report;
 
     const channelName = report.channelSlug || getChannelSlugFromUrl(report.pageUrl) || getChannelSlugFromUrl(activeTabUrl);
-    const channelLabel = channelName ? `対象: ${channelName}` : "対象: Kickページ";
-
-    // filter users by selected tab
+    const channelLabel = channelName ? t("target", { channel: channelName }) : t("targetKick");
+    renderChatStatus(report.chatStatus);
+    const tabOrder = ["broadcaster", "watch", "bot", "other"];
+    const countsByTab = Object.fromEntries(tabOrder.map((tab) => [
+      tab,
+      users.filter((u) => matchesDetectionTab(u, tab)).length
+    ]));
+    if (!detectionTabInitialized && users.length && countsByTab[selectedDetectionTab] === 0) {
+      const fallbackTab = tabOrder.find((tab) => countsByTab[tab] > 0);
+      if (fallbackTab) {
+        selectedDetectionTab = fallbackTab;
+      }
+    }
+    detectionTabInitialized = true;
     const filtered = users.filter((u) => matchesDetectionTab(u, selectedDetectionTab));
 
-    channel.textContent = `${channelLabel}　検出: ${users.length}件`;
+    channel.textContent = t("detectedCount", { target: channelLabel, count: users.length });
     summary.textContent = "";
     summary.hidden = true;
 
     // タブバッジ更新
-    for (const tab of ['broadcaster', 'watch', 'bot', 'other']) {
+    for (const tab of tabOrder) {
       const badge = document.getElementById(`badge-${tab}`);
+      const button = document.querySelector(`#detection-tabs .klt-popup__tab[data-tab="${tab}"]`);
       if (!badge) continue;
-      const count = users.filter((u) => matchesDetectionTab(u, tab)).length;
+      const count = countsByTab[tab];
       if (count > 0) {
         badge.textContent = count > 99 ? '99+' : String(count);
         badge.hidden = false;
       } else {
         badge.hidden = true;
       }
+      button?.classList.toggle("is-active", tab === selectedDetectionTab);
     }
 
     list.replaceChildren();
     if (!filtered.length) {
-      renderEmpty("検出されたアカウントはまだありません。");
+      renderEmpty(t("empty"));
       return;
     }
 
     for (const user of filtered) {
       const item = document.createElement("div");
       item.className = "klt-popup__item";
-      item.title = `${user.username} を固定表示`;
+      item.title = t("pinTitle", { username: user.username });
 
-      const badge = createDetectionBadge(user);
+      const badge = createDetectionBadge(user, selectedDetectionTab);
       badge.dataset.pinUsername = user.username;
 
       const body = document.createElement("span");
@@ -290,37 +658,53 @@
       const name = document.createElement("button");
       name.className = "klt-popup__name klt-popup__name-button";
       name.type = "button";
+      name.dataset.pinUsername = user.username;
       const nameText = document.createElement("span");
       nameText.className = "klt-popup__name-text";
       nameText.textContent = user.username;
-      name.append(nameText, createIcon("external"));
-      name.dataset.profileUrl = user.profileUrl || getProfileUrl(user.username);
-      name.title = `${user.username} のKickページを開く`;
+      name.append(nameText);
+      if (user.detectedMessageAt > 0) {
+        const relativeTime = document.createElement("span");
+        relativeTime.className = "klt-popup__name-time";
+        relativeTime.textContent = formatRelativeTime(user.detectedMessageAt);
+        relativeTime.title = new Date(user.detectedMessageAt).toLocaleString();
+        name.append(relativeTime);
+      }
+      name.append(createIcon("pin"));
+      name.title = t("popupPinTitle", { username: user.username });
 
       const reasons = document.createElement("span");
       reasons.className = "klt-popup__reasons";
-      const hasScore = Number.isFinite(Number(user.riskScore)) && Number(user.riskScore) > 0;
+      const tabReasons = getReasonsForTab(user, selectedDetectionTab);
+      const hasScore = (selectedDetectionTab === "bot" || selectedDetectionTab === "other") &&
+        Number.isFinite(Number(user.riskScore)) &&
+        Number(user.riskScore) > 0 &&
+        tabReasons.some((reason) => selectedDetectionTab === "bot" ? isBotReason(reason) : !isBotReason(reason));
       const scoreText = hasScore
-        ? `score ${Math.max(0, Math.min(100, Math.round(Number(user.riskScore))))} (${Math.max(0, Math.round(Number(user.riskRuleCount) || 0))}条件)`
+        ? t("score", {
+          score: Math.max(0, Math.min(100, Math.round(Number(user.riskScore)))),
+          rules: Math.max(0, Math.round(Number(user.riskRuleCount) || 0))
+        })
         : "";
-      const reasonText = Array.isArray(user.reasons) && user.reasons.length
-        ? user.reasons.join(" / ")
-        : "検出";
+      const reasonText = tabReasons.length
+        ? tabReasons.map(localizeReason).join(" / ")
+        : t("detected");
       reasons.textContent = scoreText ? `${scoreText} | ${reasonText}` : reasonText;
 
       const detail = document.createElement("button");
       detail.className = "klt-popup__item-body";
       detail.type = "button";
       detail.dataset.pinUsername = user.username;
-      detail.title = `${user.username} をポップアップ固定`;
+      detail.title = t("popupPinTitle", { username: user.username });
       const pinHint = document.createElement("span");
       pinHint.className = "klt-popup__pin-hint";
-      pinHint.append(createIcon("pin"), document.createTextNode("固定"));
+      pinHint.append(createIcon("pin"), document.createTextNode(t("fixed")));
       detail.appendChild(reasons);
-      if (user.lastMessage) {
+      const preview = getPreviewMessageForTab(user, selectedDetectionTab);
+      if (preview?.text) {
         const message = document.createElement("span");
         message.className = "klt-popup__message";
-        message.textContent = user.lastMessage;
+        message.innerHTML = renderMessageWithEmotes(preview.text);
         detail.appendChild(message);
       }
       detail.appendChild(pinHint);
@@ -332,6 +716,53 @@
     }
   }
 
+  function renderChatStatus(status) {
+    if (!chatStatus) return;
+
+    const normalized = normalizeChatStatus(status);
+    if (!normalized) {
+      chatStatus.hidden = true;
+      chatStatus.textContent = "";
+      chatStatus.removeAttribute("data-level");
+      return;
+    }
+
+    const label = getChatStatusLabel(normalized.level);
+    const windowLabel = t("recentWindow", { minutes: normalized.windowMinutes });
+    chatStatus.textContent = `${label}（${windowLabel}）`;
+    chatStatus.dataset.level = normalized.level;
+    chatStatus.title = `${label} / ${windowLabel} / ${normalized.messageCount} comments / ${normalized.userCount} users`;
+    chatStatus.hidden = false;
+  }
+
+  function normalizeChatStatus(value) {
+    const status = value && typeof value === "object" ? value : {};
+    const levels = new Set(["checking", "quiet", "normal", "active", "caution", "rough"]);
+    const level = levels.has(String(status.level)) ? String(status.level) : "";
+    if (!level) return null;
+
+    return {
+      level,
+      windowMinutes: Math.max(1, Math.min(60, Math.round(Number(status.windowMinutes) || 5))),
+      messageCount: Math.max(0, Math.round(Number(status.messageCount) || 0)),
+      userCount: Math.max(0, Math.round(Number(status.userCount) || 0)),
+      detectionCount: Math.max(0, Math.round(Number(status.detectionCount) || 0)),
+      highRiskCount: Math.max(0, Math.round(Number(status.highRiskCount) || 0))
+    };
+  }
+
+  function getChatStatusLabel(level) {
+    const labels = {
+      checking: t("chatStatusChecking"),
+      quiet: t("chatStatusQuiet"),
+      normal: t("chatStatusNormal"),
+      active: t("chatStatusActive"),
+      caution: t("chatStatusCaution"),
+      rough: t("chatStatusRough")
+    };
+    return labels[level] || labels.normal;
+  }
+
   async function pinDetectedUser(username) {
     if (!activeTabId || !username) return;
 
@@ -341,15 +772,53 @@
         username
       });
       summary.textContent = response?.ok
-        ? `${username} を固定しました`
-        : response?.reason || "固定できませんでした";
+        ? t("pinned", { username })
+        : response?.reason || t("cannotPin");
     } catch (_error) {
-      summary.textContent = "Kickページを再読み込みしてください。";
+      summary.textContent = t("reloadKick");
     }
   }
 
-  function createDetectionBadge(user) {
-    const category = getDetectionCategory(user);
+  function createDetectionBadge(user, tab = "") {
+    const categories = getTabDetectionCategories(user, tab);
+    const stack = document.createElement("span");
+    stack.className = "klt-popup__badge-stack";
+    stack.title = categories.map(getDetectionLabelForCategory).join(" / ");
+
+    for (const category of categories) {
+      stack.appendChild(createCategoryBadge(user, category));
+    }
+
+    return stack;
+  }
+
+  function formatRelativeTime(timestamp) {
+    const value = Number(timestamp) || 0;
+    if (!value) return "";
+
+    const diffMs = Math.max(0, Date.now() - value);
+    const diffMinutes = Math.floor(diffMs / 60000);
+    if (diffMinutes <= 0) return t("timeJustNow");
+    if (diffMinutes < 60) {
+      return t("timeMinutesAgo", { count: diffMinutes });
+    }
+
+    const diffHours = Math.floor(diffMinutes / 60);
+    if (diffHours < 24) {
+      return t("timeHoursAgo", { count: diffHours });
+    }
+
+    const diffDays = Math.floor(diffHours / 24);
+    return t("timeDaysAgo", { count: diffDays });
+  }
+
+  function cleanText(value) {
+    return String(value || "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function createCategoryBadge(user, category) {
     const badge = document.createElement("span");
     badge.className = `klt-popup__skull klt-popup__skull--${category}`;
 
@@ -368,21 +837,116 @@
     return badge;
   }
 
-  function getDetectionCategory(user) {
+  function getDetectionCategories(user) {
     const explicit = String(user?.detectionCategory || "");
-    if (["threat", "privacy", "watch", "broadcaster", "bot"].includes(explicit)) return explicit;
+    const reasons = normalizeDetectionReasons(user?.reasons);
+    const categories = [];
 
-    const reasons = Array.isArray(user?.reasons) ? user.reasons : [];
-    if (reasons.some((reason) => /殺害|危害|暴力|脅迫/.test(reason))) return "threat";
-    if (reasons.some((reason) => /個人情報|住所|電話番号|メール/.test(reason))) return "privacy";
-    if (reasons.includes("ウォッチリスト")) return "watch";
-    if (reasons.includes("配信者リスト")) return "broadcaster";
-    if (reasons.length) return "bot";
-    return "default";
+    if (reasons.some((reason) => /殺害|危害|暴力|脅迫/.test(reason)) || explicit === "threat") {
+      categories.push("threat");
+    }
+    if (reasons.some((reason) => /暴言|攻撃/.test(reason)) || explicit === "abuse") {
+      categories.push("abuse");
+    }
+    if (reasons.some((reason) => /個人情報|住所|電話番号|メール/.test(reason)) || explicit === "privacy") {
+      categories.push("privacy");
+    }
+    if (reasons.includes("ウォッチリスト") || explicit === "watch") {
+      categories.push("watch");
+    }
+    if (reasons.includes("配信者リスト") || explicit === "broadcaster") {
+      categories.push("broadcaster");
+    }
+    if (reasons.some(isBotReason) || explicit === "bot" || (!categories.length && reasons.length)) {
+      categories.push("bot");
+    }
+
+    return categories.length ? categories : ["default"];
+  }
+
+  function getReasonsForTab(user, tab) {
+    const reasons = normalizeDetectionReasons(user?.reasons);
+    if (!tab) return reasons;
+    if (tab === "broadcaster") return reasons.filter((reason) => reason === "配信者リスト");
+    if (tab === "watch") return reasons.filter((reason) => reason === "ウォッチリスト");
+    if (tab === "bot") return reasons.filter(isBotReason);
+    if (tab === "other") {
+      const filtered = reasons.filter((reason) => {
+        return reason !== "配信者リスト" &&
+          reason !== "ウォッチリスト" &&
+          !isBotReason(reason);
+      });
+      return filtered;
+    }
+    return reasons;
+  }
+
+  function getPreviewMessageForTab(user, tab) {
+    const detectedMessageText = cleanText(String(user?.detectedMessageText || ""));
+    if (detectedMessageText) return { text: detectedMessageText };
+
+    const evidenceTexts = Array.isArray(user?.evidenceTexts) ? user.evidenceTexts.map(String) : [];
+    const tabCategories = getTabDetectionCategories(user, tab);
+
+    if (tabCategories.includes("threat")) {
+      const threatEvidence = evidenceTexts.find((text) => /^危害:\s*/.test(text));
+      if (threatEvidence) return createPreviewPayload(threatEvidence);
+    }
+
+    if (tabCategories.includes("privacy")) {
+      const personalInfoEvidence = evidenceTexts.find((text) => /^個人情報:\s*/.test(text));
+      if (personalInfoEvidence) return createPreviewPayload(personalInfoEvidence);
+    }
+
+    if (tabCategories.includes("abuse")) {
+      const abuseEvidence = evidenceTexts.find((text) => /^暴言:\s*/.test(text));
+      if (abuseEvidence) return createPreviewPayload(abuseEvidence);
+    }
+
+    if (tabCategories.includes("bot")) {
+      const botEvidence = evidenceTexts.find((text) => /^(同一文|長文重複|大量反復|絵文字\/スタンプ|URL|反復|低情報):\s*/.test(text));
+      if (botEvidence) return createPreviewPayload(botEvidence);
+    }
+
+    const genericEvidence = evidenceTexts[0];
+    if (genericEvidence) return createPreviewPayload(genericEvidence);
+    return null;
+  }
+
+  function createPreviewPayload(evidenceText) {
+    const text = String(evidenceText || "").replace(/^[^:]+:\s*/, "");
+    return text ? { text } : null;
+  }
+
+  function getTabDetectionCategories(user, tab) {
+    const allCategories = getDetectionCategories(user);
+    if (!tab) return allCategories;
+
+    if (tab === "broadcaster") {
+      return allCategories.includes("broadcaster") ? ["broadcaster"] : [];
+    }
+    if (tab === "watch") {
+      return allCategories.includes("watch") ? ["watch"] : [];
+    }
+    if (tab === "bot") {
+      return allCategories.includes("bot") ? ["bot"] : [];
+    }
+    if (tab === "other") {
+      const otherCategories = allCategories.filter((category) => {
+        return category !== "broadcaster" &&
+          category !== "watch" &&
+          category !== "bot";
+      });
+      if (otherCategories.length) return otherCategories;
+      return getReasonsForTab(user, tab).length ? ["default"] : [];
+    }
+
+    return allCategories;
   }
 
   function getDetectionIconForCategory(category) {
     if (category === "threat") return "🔪";
+    if (category === "abuse") return "⚠";
     if (category === "privacy") return "👤";
     if (category === "watch") return "★";
     if (category === "broadcaster") return "📺";
@@ -390,15 +954,40 @@
     return "💀";
   }
 
+  function getDetectionLabelForCategory(category) {
+    if (category === "threat") return t("threat");
+    if (category === "abuse") return t("abuse");
+    if (category === "privacy") return t("privacy");
+    if (category === "watch") return t("watch");
+    if (category === "broadcaster") return t("broadcaster");
+    if (category === "bot") return t("bot");
+    return t("detected");
+  }
+
+  function localizeReason(reason) {
+    const value = String(reason || "");
+    if (UI_LANG === "ja") return value;
+    return REASON_LABELS_EN.get(value) || value;
+  }
+
+  function isBotReason(reason) {
+    return /連投|件以上|コメント|間隔|反復|絵文字|スタンプ|BOT|URL|大量反復|同一文/.test(String(reason || ""));
+  }
+
+  function normalizeDetectionReasons(reasons) {
+    const normalized = [];
+    for (const value of Array.isArray(reasons) ? reasons : []) {
+      let reason = String(value || "").replace(/\s+/g, " ").trim();
+      if (!reason) continue;
+      if (reason === "殺害/危害予告らしき投稿") reason = "危害/脅迫性の高い投稿";
+      if (!normalized.includes(reason)) normalized.push(reason);
+    }
+    return normalized;
+  }
+
   function matchesDetectionTab(user, tab) {
     if (!user || !tab) return false;
-    const reasons = Array.isArray(user.reasons) ? user.reasons : [];
-    if (tab === 'broadcaster') return reasons.includes('配信者リスト');
-    if (tab === 'watch') return reasons.includes('ウォッチリスト');
-    const isBotReason = (r) => /連投|件以上|コメント|間隔|反復|絵文字|スタンプ|BOT|URL|大量反復|同一文/.test(r);
-    if (tab === 'bot') return reasons.some(isBotReason);
-    if (tab === 'other') return !reasons.includes('配信者リスト') && !reasons.includes('ウォッチリスト') && !reasons.some(isBotReason);
-    return !reasons.includes('配信者リスト') && !reasons.includes('ウォッチリスト');
+    return getTabDetectionCategories(user, tab).length > 0;
   }
 
   function renderEmpty(message) {
@@ -433,6 +1022,10 @@
 
     const botToggle = document.querySelector("#bot-detection-enabled");
     if (botToggle) botToggle.checked = settings.botDetectionEnabled !== false;
+    const dashboardToggle = document.querySelector("#compact-dashboard-enabled");
+    if (dashboardToggle) dashboardToggle.checked = settings.compactDashboardEnabled !== false;
+    if (botSensitivitySelect) botSensitivitySelect.value = normalizeDetectionSensitivity(settings.botDetectionSensitivity);
+    if (otherSensitivitySelect) otherSensitivitySelect.value = normalizeDetectionSensitivity(settings.otherDetectionSensitivity);
 
     const durationSelect = document.querySelector("#temporary-popup-duration");
     if (durationSelect) {
@@ -446,12 +1039,12 @@
 
   function updateDurationLabel(dur) {
     const label = document.querySelector("#temporary-popup-duration-label");
-    if (label) label.textContent = dur === 0 ? "" : "秒";
+    if (label) label.textContent = dur === 0 ? "" : t("sec");
   }
 
   function renderBroadcasterCount(container, values) {
     container.replaceChildren();
-    container.style.display = 'none';
+    container.style.display = "none";
   }
 
   function renderUsernameChips(container, listKey, values) {
@@ -466,7 +1059,7 @@
       const remove = document.createElement("button");
       remove.type = "button";
       remove.dataset.remove = username;
-      remove.title = `${username} を削除`;
+      remove.title = t("removeTitle", { username });
       remove.appendChild(createIcon("x"));
 
       chip.append(label, remove);
@@ -486,65 +1079,149 @@
       channelSlug: "",
       pageUrl: "",
       updatedAt: Date.now(),
+      chatStatus: createCheckingChatStatus(),
       users: []
+    };
+  }
+
+  function createCheckingChatStatus() {
+    return {
+      level: "checking",
+      windowMinutes: 5,
+      messageCount: 0,
+      userCount: 0,
+      detectionCount: 0,
+      highRiskCount: 0
     };
   }
 
   function mergeReports(contentReport, backgroundReport) {
     const primary = normalizeReport(contentReport);
     const secondary = normalizeReport(backgroundReport);
-    if (shouldAvoidCrossChannelMerge(primary, secondary)) {
-      return Number(primary.updatedAt || 0) >= Number(secondary.updatedAt || 0)
-        ? primary
-        : secondary;
-    }
+    const activeSlug = getChannelSlugFromUrl(activeTabUrl);
+    const reports = [primary, secondary].filter((report) => isReportForActiveChannel(report, activeSlug));
+    const chosenMeta = chooseReportMeta(reports, activeSlug);
     const merged = new Map();
 
-    for (const user of [...secondary.users, ...primary.users]) {
-      const key = normalizeListUsername(user.username);
-      if (!key) continue;
+    for (const report of reports) {
+      for (const user of report.users) {
+        const key = normalizeListUsername(user.username);
+        if (!key) continue;
 
-      const existing = merged.get(key);
-      if (!existing) {
+        const existing = merged.get(key);
+        if (!existing) {
+          merged.set(key, {
+            ...user,
+            reasons: [...new Set(Array.isArray(user.reasons) ? user.reasons : [])]
+          });
+          continue;
+        }
+
+        const reasonSet = new Set([
+          ...(Array.isArray(existing.reasons) ? existing.reasons : []),
+          ...(Array.isArray(user.reasons) ? user.reasons : [])
+        ]);
+        const newer = Number(user.lastDetectedAt || 0) >= Number(existing.lastDetectedAt || 0) ? user : existing;
+
+        const mergedDetectedMessageText = choosePreferredDetectedMessageText(
+          existing.detectedMessageText,
+          user.detectedMessageText
+        );
+
         merged.set(key, {
-          ...user,
-          reasons: [...new Set(Array.isArray(user.reasons) ? user.reasons : [])]
+          ...existing,
+          ...newer,
+          reasons: [...reasonSet],
+          riskScore: Math.max(Number(existing.riskScore) || 0, Number(user.riskScore) || 0),
+          riskRuleCount: Math.max(Number(existing.riskRuleCount) || 0, Number(user.riskRuleCount) || 0),
+          evidenceTexts: Array.from(new Set([
+            ...(Array.isArray(existing.evidenceTexts) ? existing.evidenceTexts : []),
+            ...(Array.isArray(user.evidenceTexts) ? user.evidenceTexts : [])
+          ])).slice(0, 6),
+          detectedMessageId: String(user.detectedMessageId || existing.detectedMessageId || "").slice(0, 120),
+          detectedMessageKey: String(user.detectedMessageKey || existing.detectedMessageKey || "").slice(0, 240),
+          detectedMessageAt: Math.max(Number(existing.detectedMessageAt) || 0, Number(user.detectedMessageAt) || 0),
+          detectedMessageText: mergedDetectedMessageText,
+          avatarUrl: user.avatarUrl || existing.avatarUrl || "",
+          profileUrl: user.profileUrl || existing.profileUrl || getProfileUrl(user.username || existing.username)
         });
-        continue;
       }
-
-      const reasonSet = new Set([
-        ...(Array.isArray(existing.reasons) ? existing.reasons : []),
-        ...(Array.isArray(user.reasons) ? user.reasons : [])
-      ]);
-      const newer = Number(user.lastDetectedAt || 0) >= Number(existing.lastDetectedAt || 0) ? user : existing;
-
-      merged.set(key, {
-        ...existing,
-        ...newer,
-        reasons: [...reasonSet],
-        riskScore: Math.max(Number(existing.riskScore) || 0, Number(user.riskScore) || 0),
-        riskRuleCount: Math.max(Number(existing.riskRuleCount) || 0, Number(user.riskRuleCount) || 0),
-        messageCount: Math.max(Number(existing.messageCount) || 0, Number(user.messageCount) || 0),
-        avatarUrl: user.avatarUrl || existing.avatarUrl || "",
-        profileUrl: user.profileUrl || existing.profileUrl || getProfileUrl(user.username || existing.username)
-      });
     }
 
-    const chosenMeta = Number(primary.updatedAt || 0) >= Number(secondary.updatedAt || 0) ? primary : secondary;
+    const users = [...merged.values()].sort(compareDetectedUsersByDiscoveryTime);
+    const chatStatus = normalizeChatStatus(chooseChatStatus(reports, chosenMeta)) || createCheckingChatStatus();
+    chatStatus.detectionCount = users.length;
+
     return {
       channelSlug: chosenMeta.channelSlug || "",
       pageUrl: chosenMeta.pageUrl || "",
-      updatedAt: Math.max(Number(primary.updatedAt) || 0, Number(secondary.updatedAt) || 0, Date.now()),
-      users: [...merged.values()].sort((a, b) => Number(b.lastDetectedAt || 0) - Number(a.lastDetectedAt || 0))
+      updatedAt: Math.max(...reports.map((report) => Number(report.updatedAt) || 0), Date.now()),
+      chatStatus,
+      users
     };
   }
 
-  function shouldAvoidCrossChannelMerge(primary, secondary) {
-    const a = String(primary.channelSlug || "").toLowerCase();
-    const b = String(secondary.channelSlug || "").toLowerCase();
-    if (!a || !b) return false;
-    return a !== b;
+  function compareDetectedUsersByDiscoveryTime(a, b) {
+    const left = Number(a?.firstDetectedAt || a?.lastDetectedAt || 0);
+    const right = Number(b?.firstDetectedAt || b?.lastDetectedAt || 0);
+    if (right !== left) return right - left;
+    return String(a?.username || "").localeCompare(String(b?.username || ""));
+  }
+
+  function chooseChatStatus(reports, chosenMeta) {
+    const metaStatus = normalizeChatStatus(chosenMeta?.chatStatus);
+    if (metaStatus) return metaStatus;
+
+    for (const report of reports) {
+      const status = normalizeChatStatus(report?.chatStatus);
+      if (status) return status;
+    }
+
+    return null;
+  }
+
+  function choosePreferredDetectedMessageText(left, right) {
+    const a = cleanText(left).slice(0, 180);
+    const b = cleanText(right).slice(0, 180);
+    if (!a) return b;
+    if (!b) return a;
+    return b.length > a.length ? b : a;
+  }
+
+  function isReportForActiveChannel(report, activeSlug) {
+    if (!activeSlug) return true;
+    const reportSlug = String(report?.channelSlug || getChannelSlugFromUrl(report?.pageUrl) || "").toLowerCase();
+    if (!reportSlug) return true;
+    return reportSlug === String(activeSlug).toLowerCase();
+  }
+
+  function chooseReportMeta(reports, activeSlug) {
+    const candidates = Array.isArray(reports) ? reports : [];
+    let best = createEmptyReport();
+    let bestScore = -1;
+
+    for (const report of candidates) {
+      const score = scoreReportMeta(report, activeSlug);
+      if (score > bestScore) {
+        best = report;
+        bestScore = score;
+      }
+    }
+
+    return best;
+  }
+
+  function scoreReportMeta(report, activeSlug) {
+    const slug = String(report?.channelSlug || "").toLowerCase();
+    const usersCount = Array.isArray(report?.users) ? report.users.length : 0;
+    let score = 0;
+
+    if (activeSlug && slug === String(activeSlug).toLowerCase()) score += 100;
+    if (usersCount > 0) score += 40;
+    if (slug) score += 20;
+    score += Math.min(30, Math.floor((Number(report?.updatedAt) || 0) / 1000) % 30);
+
+    return score;
   }
 
   function normalizeReport(report) {
@@ -558,15 +1235,17 @@
           profileUrl: String(user.profileUrl || getProfileUrl(user.username || "")),
           avatarUrl: String(user.avatarUrl || ""),
           detectionCategory: String(user.detectionCategory || ""),
-          reasons: Array.isArray(user.reasons) ? user.reasons.map(String).slice(0, 12) : [],
+          reasons: normalizeDetectionReasons(user.reasons).slice(0, 12),
           riskScore: Number(user.riskScore) || 0,
           riskRuleCount: Number(user.riskRuleCount) || 0,
           riskCritical: Boolean(user.riskCritical),
+          evidenceTexts: Array.isArray(user.evidenceTexts) ? user.evidenceTexts.map(String).slice(0, 6) : [],
           firstDetectedAt: Number(user.firstDetectedAt) || 0,
           lastDetectedAt: Number(user.lastDetectedAt) || 0,
-          lastCommentAt: Number(user.lastCommentAt) || 0,
-          messageCount: Number(user.messageCount) || 0,
-          lastMessage: String(user.lastMessage || "").slice(0, 180)
+          detectedMessageId: String(user.detectedMessageId || "").slice(0, 120),
+          detectedMessageKey: String(user.detectedMessageKey || "").slice(0, 240),
+          detectedMessageAt: Number(user.detectedMessageAt) || 0,
+          detectedMessageText: String(user.detectedMessageText || "").slice(0, 180)
         }))
       : [];
 
@@ -574,6 +1253,7 @@
       channelSlug: String(report.channelSlug || ""),
       pageUrl: String(report.pageUrl || ""),
       updatedAt: Number(report.updatedAt) || 0,
+      chatStatus: normalizeChatStatus(report.chatStatus),
       users
     };
   }
@@ -588,6 +1268,28 @@
     return icon;
   }
 
+  function renderMessageWithEmotes(text) {
+    if (!text) return "";
+    const parts = String(text).split(/(\[emote:\d+:[^\]]+\])/g);
+    return parts.map((part) => {
+      const emoteMatch = part.match(/^\[emote:(\d+):([^\]]+)\]$/);
+      if (emoteMatch) {
+        const [, id, name] = emoteMatch;
+        const safeName = escapeHtml(name);
+        return `<img class="klt-popup__emote" src="https://files.kick.com/emotes/${id}/fullsize" alt="${safeName}" title="${safeName}" loading="lazy">`;
+      }
+      return escapeHtml(part);
+    }).join("");
+  }
+
+  function escapeHtml(value) {
+    return String(value || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
   async function getActiveTab() {
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
     return tabs[0] || null;
@@ -595,7 +1297,12 @@
 
   function sendTabMessage(tabId, message) {
     return new Promise((resolve, reject) => {
+      const timeout = window.setTimeout(() => {
+        reject(new Error("tab message timeout"));
+      }, 1500);
+
       chrome.tabs.sendMessage(tabId, message, (response) => {
+        window.clearTimeout(timeout);
         const error = chrome.runtime.lastError;
         if (error) {
           reject(error);
@@ -609,7 +1316,12 @@
 
   function sendRuntimeMessage(message) {
     return new Promise((resolve) => {
+      const timeout = window.setTimeout(() => {
+        resolve(null);
+      }, 1500);
+
       chrome.runtime.sendMessage(message, (response) => {
+        window.clearTimeout(timeout);
         resolve(response);
       });
     });
@@ -666,11 +1378,19 @@
       ignorelistEnabled: next.ignorelistEnabled !== false,
       broadcasterListEnabled: next.broadcasterListEnabled !== false,
       botDetectionEnabled: next.botDetectionEnabled !== false,
+      compactDashboardEnabled: next.compactDashboardEnabled !== false,
+      botDetectionSensitivity: normalizeDetectionSensitivity(next.botDetectionSensitivity),
+      otherDetectionSensitivity: normalizeDetectionSensitivity(next.otherDetectionSensitivity),
       temporaryPopupDuration: clampTemporaryPopupDuration(next.temporaryPopupDuration),
       watchlist: normalizeUsernameList(next.watchlist),
       ignorelist: normalizeUsernameList(next.ignorelist),
       broadcasterList: normalizeUsernameList(next.broadcasterList, MAX_BROADCASTER_LIST_USERS)
     };
+  }
+
+  function normalizeDetectionSensitivity(value) {
+    const level = String(value || "").trim().toLowerCase();
+    return ["low", "standard", "high"].includes(level) ? level : "standard";
   }
 
   function normalizeUsernameList(values, limit = MAX_LIST_USERS) {
@@ -731,32 +1451,46 @@
 
     broadcasterSyncStatus.classList.remove("is-success", "is-failed");
     if (!settings.broadcasterListEnabled) {
-      broadcasterSyncStatus.textContent = "配信者リストがOFFです。";
+      broadcasterSyncStatus.textContent = t("broadcasterOff");
       return;
     }
 
     const status = normalizeFollowedChannelsSyncStatus(followedChannelsSyncStatus);
+    const source = status.source ? ` / ${status.source}` : "";
+    const syncedUsernames = normalizeUsernameList(status.syncedUsernames, MAX_BROADCASTER_LIST_USERS);
+    const syncedCount = syncedUsernames.length || (status.hasSyncedCount ? Number(status.syncedCount) || 0 : 0);
     if (status.state === "success") {
       broadcasterSyncStatus.classList.add("is-success");
-      const source = status.source ? ` / ${status.source}` : "";
-      const displayedTotal = Math.max(Number(status.totalCount) || 0, Number(status.listCount) || 0);
+      const listCount = Number(status.listCount) || 0;
+
+      if (!status.hasSyncedCount) {
+        broadcasterSyncStatus.textContent = t("savedList", { count: listCount, source });
+        return;
+      }
+
+      const displayedTotal = status.hasTotalCount ? Math.max(Number(status.totalCount) || 0, syncedCount) : 0;
       const total = displayedTotal > 0 ? `/${displayedTotal}` : "";
-      broadcasterSyncStatus.textContent = `自動読み込み済み: ${status.listCount}${total}件${source}`;
+      broadcasterSyncStatus.textContent = t("autoLoaded", { count: syncedCount, total, source });
       return;
     }
 
     if (status.state === "failed") {
       broadcasterSyncStatus.classList.add("is-failed");
-      broadcasterSyncStatus.textContent = `自動読み込み失敗: ${status.reason || "理由不明"}`;
+      broadcasterSyncStatus.textContent = t("autoLoadFailed", { reason: translateKnownStatusReason(status.reason) || t("unknownReason") });
       return;
     }
 
     if (status.state === "running") {
-      broadcasterSyncStatus.textContent = "フォロー中チャンネルを読み込み中...";
+      if (status.hasSyncedCount && syncedCount > 0) {
+        const currentUsername = status.currentUsername || syncedUsernames.at(-1) || "...";
+        broadcasterSyncStatus.textContent = t("autoLoadingCurrent", { username: currentUsername, count: syncedCount, source });
+      } else {
+        broadcasterSyncStatus.textContent = t("autoLoading", { source });
+      }
       return;
     }
 
-    broadcasterSyncStatus.textContent = status.reason || "Kickページを開くと自動読み込みします。";
+    broadcasterSyncStatus.textContent = translateKnownStatusReason(status.reason) || t("idleSync");
   }
 
   function normalizeFollowedChannelsSyncStatus(value) {
@@ -770,6 +1504,17 @@
       reason: String(status.reason || ""),
       updatedAt: Number(status.updatedAt) || 0,
       listCount: Number(status.listCount) || 0,
+      hasSyncedCount: Object.prototype.hasOwnProperty.call(status, "syncedCount"),
+      syncedCount: Number(status.syncedCount) || 0,
+      syncedUsernames: normalizeUsernameList(status.syncedUsernames, MAX_BROADCASTER_LIST_USERS),
+      currentUsername: String(status.currentUsername || ""),
+      listOnlyCount: Number(status.listOnlyCount) || 0,
+      removedCount: Number(status.removedCount) || 0,
+      pageCount: Number(status.pageCount) || 0,
+      stopReason: String(status.stopReason || ""),
+      hasTotalCount: Object.prototype.hasOwnProperty.call(status, "hasTotalCount")
+        ? Boolean(status.hasTotalCount)
+        : (Number(status.totalCount) || 0) > 0,
       totalCount: Number(status.totalCount) || 0,
       addedCount: Number(status.addedCount) || 0,
       source: String(status.source || ""),
@@ -781,9 +1526,18 @@
   function createDefaultFollowedChannelsSyncStatus() {
     return {
       state: "idle",
-      reason: "Kickページを開くと自動読み込みします。",
+      reason: t("idleSync"),
       updatedAt: 0,
       listCount: 0,
+      hasSyncedCount: false,
+      syncedCount: 0,
+      syncedUsernames: [],
+      currentUsername: "",
+      listOnlyCount: 0,
+      removedCount: 0,
+      pageCount: 0,
+      stopReason: "",
+      hasTotalCount: false,
       addedCount: 0,
       source: "",
       pageUrl: "",

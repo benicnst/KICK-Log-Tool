@@ -27,6 +27,12 @@ rsync -a \
   --exclude=".DS_Store" \
   --exclude="*.log" \
   --exclude="*.zip" \
+  --exclude="*.bak*" \
+  --exclude="*.ai" \
+  --exclude=".gitignore" \
+  --exclude="assets" \
+  --exclude="docs" \
+  --exclude="scripts" \
   --exclude="dist" \
   --exclude="build" \
   --exclude="node_modules" \

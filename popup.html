@@ -12,6 +12,7 @@
         <div>
           <h1>KICK Log Tool</h1>
           <div id="channel" class="klt-popup__channel">対象ページを確認中...</div>
+          <div id="chat-status" class="klt-chat-status" hidden></div>
           <p id="summary">検出状況を読み込み中...</p>
         </div>
         <div class="klt-popup__header-actions">
@@ -29,7 +30,6 @@
       <div id="main-view" class="klt-popup__view">
 
         <section class="klt-popup__section">
-          <h2>検出一覧</h2>
           <div id="detection-tabs" class="klt-popup__tabs" role="tablist" aria-label="検出タブ">
             <button role="tab" id="tab-broadcaster" data-tab="broadcaster" class="klt-popup__tab is-active">
               <span class="klt-icon klt-icon--users" aria-hidden="true"></span>
@@ -42,7 +42,7 @@
               <span class="klt-tab-badge" id="badge-watch" hidden></span>
             </button>
             <button role="tab" id="tab-bot" data-tab="bot" class="klt-popup__tab">
-              <span class="klt-icon klt-icon--search" aria-hidden="true"></span>
+              <span class="klt-icon klt-icon--bot" aria-hidden="true"></span>
               <span class="klt-tab-label">BOT/連投</span>
               <span class="klt-tab-badge" id="badge-bot" hidden></span>
             </button>
@@ -121,6 +121,22 @@
             </div>
           </section>
 
+          <div class="klt-popup__setting" data-list-setting="compactDashboard">
+            <div class="klt-popup__setting-header">
+              <div>
+                <div class="klt-popup__label">
+                  <span class="klt-icon klt-icon--sliders" aria-hidden="true"></span>
+                  <span id="compact-dashboard-label">チャット上部ダッシュボード</span>
+                </div>
+                <div id="compact-dashboard-hint" class="klt-popup__hint">チャット表示欄の上部に、最小限の状況メーターを表示します。</div>
+              </div>
+              <label class="klt-popup__toggle">
+                <input id="compact-dashboard-enabled" type="checkbox">
+                <span></span>
+              </label>
+            </div>
+          </div>
+
           <div class="klt-popup__setting" data-list-setting="broadcasterList">
             <div class="klt-popup__setting-header">
               <div>
@@ -135,7 +151,13 @@
                 <span></span>
               </label>
             </div>
-            <div id="broadcaster-sync-status" class="klt-popup__sync-status">読み込み状況を確認中...</div>
+            <div class="klt-popup__sync-row">
+              <div id="broadcaster-sync-status" class="klt-popup__sync-status">読み込み状況を確認中...</div>
+              <button id="broadcaster-sync-reload" class="klt-popup__sync-reload" type="button">
+                <span class="klt-icon klt-icon--refresh" aria-hidden="true"></span>
+                <span>再読み込み</span>
+              </button>
+            </div>
             <div id="broadcaster-list-items" class="klt-popup__chips"></div>
           </div>
 
@@ -143,8 +165,8 @@
             <div class="klt-popup__setting-header">
               <div>
                 <div class="klt-popup__label">
-                  <span class="klt-icon klt-icon--search" aria-hidden="true"></span>
-                  <span>BOT/連投</span>
+                  <span class="klt-icon klt-icon--bot" aria-hidden="true"></span>
+                  <span>BOT/連投/その他</span>
                 </div>
                 <div class="klt-popup__hint">不審な投稿パターンを自動検出します。</div>
               </div>
@@ -153,6 +175,25 @@
                 <span></span>
               </label>
             </div>
+            <div class="klt-popup__sensitivity-grid" aria-label="検知感度">
+              <label class="klt-popup__sensitivity-field" for="bot-detection-sensitivity">
+                <span>BOT/連投</span>
+                <select id="bot-detection-sensitivity" class="klt-popup__sensitivity-select">
+                  <option value="low">控えめ</option>
+                  <option value="standard">標準</option>
+                  <option value="high">強め</option>
+                </select>
+              </label>
+              <label class="klt-popup__sensitivity-field" for="other-detection-sensitivity">
+                <span>その他</span>
+                <select id="other-detection-sensitivity" class="klt-popup__sensitivity-select">
+                  <option value="low">控えめ</option>
+                  <option value="standard">標準</option>
+                  <option value="high">強め</option>
+                </select>
+              </label>
+            </div>
+            <div class="klt-popup__hint klt-popup__hint--sensitivity">検知条件の詳細は表示せず、強さだけを調整します。</div>
           </div>
 
           <div class="klt-popup__setting" data-list-setting="watchlist">
@@ -183,7 +224,7 @@
             <div class="klt-popup__setting-header">
               <div>
                 <div class="klt-popup__label">
-                  <span class="klt-icon klt-icon--shield" aria-hidden="true"></span>
+                  <span class="klt-icon klt-icon--eye-off" aria-hidden="true"></span>
                   <span>無視</span>
                 </div>
                 <div class="klt-popup__hint">登録IDは自動検出・自動表示から除外します。</div>

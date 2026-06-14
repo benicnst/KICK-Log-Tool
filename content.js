@@ -3,7 +3,7 @@
 
   const DISPLAY_ALL_MESSAGES = 0;
   const MAX_USERS = 250;
-  const MAX_STREAM_CACHE_MESSAGES = 20000;
+  const MAX_STREAM_CACHE_MESSAGES = 30000;
   const SAVE_DELAY_MS = 700;
   const API_WINDOW_MS = 60 * 1000;
   const API_ORIGIN = "https://kick.com";
@@ -61,7 +61,7 @@
       otherScoreThreshold: OTHER_SCORE_THRESHOLD
     },
     high: {
-      botScoreThreshold: 52,
+      botScoreThreshold: 40,
       botRuleMatchThreshold: 2,
       otherScoreThreshold: 42
     }
@@ -69,10 +69,13 @@
   const TEMPO_SCORE_CAP = 36;
   const REASON_THREAT = "危害/脅迫性の高い投稿";
   const REASON_ABUSE = "攻撃的暴言";
+  const REASON_SEXUAL_HARASSMENT = "性的嫌がらせ";
+  const REASON_BODY_SHAMING = "身体侮辱";
   const REASON_OLD_THREAT = "殺害/危害予告らしき投稿";
   const REASON_COORDINATED = "複数アカウント同一文連投";
   const REASON_LOW_INFO_REPEAT = "低情報コメント連投";
   const REASON_RAPID_SPAM = "短時間の高頻度連投";
+  const REASON_REPEATED_BURSTS = "文面変更を伴う反復連投";
   const SUSPICIOUS_EVAL_DEBOUNCE_MS = 1200;
   const COORDINATED_SPAM_WINDOW_MS = 25 * 1000;
   const COORDINATED_SPAM_MIN_USERS = 2;
@@ -128,6 +131,7 @@
       noChannel: "チャンネル名なし",
       initialNoContext: "初期API補完: 配信情報なし",
       initialApiError: "初期API補完エラー",
+      initialApiBackfillComplete: "初回API補完: 過去コメント {total}件取得（反映 {accepted}件）",
       followedDisabled: "配信者リストがOFFです。",
       followedLoading: "フォロー中チャンネルを読み込み中...",
       followedNotFound: "フォロー中チャンネルが見つかりませんでした。",
@@ -184,6 +188,7 @@
       noChannel: "No channel name",
       initialNoContext: "Initial API backfill: no stream info",
       initialApiError: "Initial API backfill error",
+      initialApiBackfillComplete: "Initial API backfill: loaded {total} past comments ({accepted} applied)",
       followedDisabled: "Broadcaster list is off.",
       followedLoading: "Loading followed channels...",
       followedNotFound: "No followed channels found.",
@@ -254,6 +259,8 @@
     lastInitialRange: "",
     lastInitialOldestAt: "",
     lastInitialReachedTarget: false,
+    lastInitialMessageCount: 0,
+    lastInitialAcceptedMessageCount: 0,
     lastMessageCount: 0,
     lastAcceptedMessageCount: 0,
     lastResponseShape: "",
@@ -1215,8 +1222,6 @@
   function normalizeMessageContent(value) {
     return cleanText(value)
       .replace(/(?:\[emote\]\s*){2,}/g, (match) => match.trim().replace(/\s+/g, " "))
-      .replace(/^(\[emote\]\s*)+/, "")
-      .replace(/(\s*\[emote\])+$/, "")
       .trim();
   }
 
@@ -1897,22 +1902,6 @@
     canonicalUserIndex.clear();
   }
 
-  function rebuildCanonicalStoreFromUserHistory() {
-    clearCanonicalStore();
-    for (const [userKey, history] of userHistory.entries()) {
-      if (!history?.displayName || !Array.isArray(history.messages)) continue;
-      for (const message of history.messages) {
-        if (!message?.text) continue;
-        rememberCanonicalMessage(userKey, history.displayName, message, {
-          syncCompatibility: false,
-          prune: false
-        });
-      }
-    }
-    pruneCanonicalStore();
-    rebuildCompatibilityUserHistoryFromCanonicalStore();
-  }
-
   function removeCanonicalMessage(userKey, messageKey) {
     canonicalMessageStore.delete(messageKey);
     const entry = canonicalUserIndex.get(userKey);
@@ -1966,31 +1955,6 @@
     for (const userKey of canonicalUserIndex.keys()) {
       syncCompatibilityUserHistoryEntry(userKey);
     }
-  }
-
-  function serializeCompatibilityUserHistory() {
-    const users = {};
-    for (const userKey of canonicalUserIndex.keys()) {
-      const displayName = getDisplayNameForUser(userKey);
-      const messages = getCanonicalHistoryMessagesForUser(userKey);
-      if (!displayName || !messages.length) continue;
-      users[userKey] = {
-        displayName,
-        messages
-      };
-    }
-
-    if (Object.keys(users).length) return users;
-
-    for (const [userKey, history] of userHistory.entries()) {
-      if (!history?.displayName || !Array.isArray(history.messages) || !history.messages.length) continue;
-      users[userKey] = {
-        displayName: history.displayName,
-        messages: history.messages
-      };
-    }
-
-    return users;
   }
 
   function getCanonicalStoreDiagnostics(limitPerUser = 5) {
@@ -2488,7 +2452,7 @@
 
   function trackCoordinatedSpamCandidate(key, username, text, timestamp, messageSource, timestampKind, isNewMessage) {
     if (!isNewMessage) return;
-    if (!isRealtimeSource(messageSource)) return;
+    if (!isRealtimeOrDomSource(messageSource)) return;
     if (normalizeTimestampKind(timestampKind) !== "posted") return;
     if (getAlertAction() === "off") return;
     if (userSettings.botDetectionEnabled === false) return;
@@ -2562,7 +2526,7 @@
   }
 
   function shouldRunSuspiciousEvaluation(key, messageSource, timestampKind, isNewMessage) {
-    if (!String(messageSource || "").startsWith("realtime")) return false;
+    if (!isRealtimeOrDomSource(messageSource)) return false;
     if (normalizeTimestampKind(timestampKind) !== "posted") return false;
 
     const now = Date.now();
@@ -3725,7 +3689,7 @@
     if (action === "off") return;
     if (userSettings.botDetectionEnabled === false) return;
     if (isIgnoredUser(key)) return;
-    if (!isRealtimeSource(messageSource)) return;
+    if (!isRealtimeOrDomSource(messageSource)) return;
     if (normalizeTimestampKind(timestampKind) !== "posted") return;
 
     const messages = getDetectionMessagesForUser(key);
@@ -4066,10 +4030,13 @@
     const labels = new Map([
       ["危害/脅迫性の高い投稿", "High-risk threat-like post"],
       ["攻撃的暴言", "Abusive language"],
+      ["性的嫌がらせ", "Sexual harassment"],
+      ["身体侮辱", "Body-shaming insult"],
       ["殺害/危害予告らしき投稿", "Threat-like post"],
       ["複数アカウント同一文連投", "Coordinated repeated text"],
       ["低情報コメント連投", "Low-info repeated comments"],
       ["短時間の高頻度連投", "High-frequency rapid posting"],
+      ["文面変更を伴う反復連投", "Repeated posting bursts with changing text"],
       ["ウォッチリスト", "Watchlist"],
       ["配信者リスト", "Broadcaster list"],
       ["同一コメントを3回以上", "Same comment 3+ times"],
@@ -4090,7 +4057,7 @@
   function getDetectionCategory(reasons) {
     const values = normalizeDetectionReasons(reasons);
     if (values.some((reason) => /殺害|危害|暴力|脅迫/.test(reason))) return "threat";
-    if (values.some((reason) => /暴言|攻撃/.test(reason))) return "abuse";
+    if (values.some((reason) => /暴言|攻撃|性的嫌がらせ|身体侮辱/.test(reason))) return "abuse";
     if (values.some((reason) => /個人情報|住所|電話番号|メール/.test(reason))) return "privacy";
     if (values.some((reason) => /ウォッチリスト/.test(reason))) return "watch";
     if (values.some((reason) => /配信者リスト/.test(reason))) return "broadcaster";
@@ -4102,11 +4069,11 @@
     const values = normalizeDetectionReasons(reasons);
     const categories = [];
     if (values.some((reason) => /殺害|危害|暴力|脅迫/.test(reason))) categories.push("threat");
-    if (values.some((reason) => /暴言|攻撃/.test(reason))) categories.push("abuse");
+    if (values.some((reason) => /暴言|攻撃|性的嫌がらせ|身体侮辱/.test(reason))) categories.push("abuse");
     if (values.some((reason) => /個人情報|住所|電話番号|メール/.test(reason))) categories.push("privacy");
     if (values.some((reason) => /ウォッチリスト/.test(reason))) categories.push("watch");
     if (values.some((reason) => /配信者リスト/.test(reason))) categories.push("broadcaster");
-    if (values.some((reason) => /連投|件以上|コメント|間隔|反復|絵文字|スタンプ|BOT|URL|大量反復|同一文/.test(String(reason || "")))) {
+    if (values.some((reason) => /連投|高頻度|件以上|コメント|間隔|反復|絵文字|スタンプ|BOT|URL|大量反復|同一文/.test(String(reason || "")))) {
       categories.push("bot");
     }
     if (!categories.length && values.length) categories.push("default");
@@ -4175,8 +4142,8 @@
   }
 
   function compareDetectedUsersByDiscoveryTime(a, b) {
-    const left = Number(a?.firstDetectedAt || a?.lastDetectedAt || 0);
-    const right = Number(b?.firstDetectedAt || b?.lastDetectedAt || 0);
+    const left = Number(a?.detectedMessageAt || a?.lastDetectedAt || a?.firstDetectedAt || 0);
+    const right = Number(b?.detectedMessageAt || b?.lastDetectedAt || b?.firstDetectedAt || 0);
     if (right !== left) return right - left;
     return String(a?.username || "").localeCompare(String(b?.username || ""));
   }
@@ -6277,13 +6244,41 @@
         isLowInformationRiskText(rawText, text) &&
         !isMostlyEmoteText(rawText);
     });
+    const repeatedBurstGroups = [...highSignalCounts.entries()]
+      .map(([text]) => {
+        const messages = sorted.filter((message) => {
+          return message.text === text && isRealtimeOrDomSource(message.source);
+        });
+        return {
+          text,
+          messages
+        };
+      })
+      .filter((group) => {
+        return group.messages.length >= 2 &&
+          hasBurstWindow(group.messages, 2, 2 * 60 * 1000);
+      });
+    const repeatedBurstMessages = repeatedBurstGroups.flatMap((group) => group.messages);
+    const repeatedBurstSignal =
+      repeatedBurstGroups.length >= 2 &&
+      hasBurstWindow(repeatedBurstMessages, 4, 10 * 60 * 1000);
+    if (repeatedBurstSignal) {
+      addContentRule(REASON_REPEATED_BURSTS, 62, "strong");
+    }
 
+    let repeatedTextBurstSignal = false;
     const repeatedHighSignalText = [...highSignalCounts.entries()]
       .find(([text, count]) => count >= 3 && isRepeatedTextRiskSignal(rawByNormalizedText.get(text) || text, text, count));
     if (repeatedHighSignalText) {
       const [text, count] = repeatedHighSignalText;
       const rawText = rawByNormalizedText.get(text) || text;
-      const strongExactRepeat = count >= 8 && isStrongRepeatedTextRiskSignal(rawText, text);
+      const repeatedMessages = sorted.filter((message) => message.text === text);
+      repeatedTextBurstSignal =
+        count >= 8 ||
+        hasBurstWindow(repeatedMessages, Math.min(5, count), 2 * 60 * 1000);
+      const strongExactRepeat =
+        repeatedTextBurstSignal ||
+        (count >= 8 && isStrongRepeatedTextRiskSignal(rawText, text));
       addContentRule(
         "同一コメントを3回以上",
         strongExactRepeat ? 62 : (count >= 5 ? 30 : 18),
@@ -6398,8 +6393,21 @@
       addContentRule(REASON_THREAT, 50, "normal");
     }
 
+    const sexualHarassmentMessages = sorted.filter((message) => analyzeSexualHarassmentMessage(message.rawText));
+    if (sexualHarassmentMessages.length >= 1) {
+      addContentRule(REASON_SEXUAL_HARASSMENT, 55, "strong");
+    }
+
+    const bodyShamingMessages = sorted.filter((message) => analyzeBodyShamingMessage(message.rawText));
+    if (bodyShamingMessages.length >= 1) {
+      addContentRule(REASON_BODY_SHAMING, 52, "strong");
+    }
+
+    const severeAbusiveMessages = sorted.filter((message) => analyzeSevereAbusiveMessage(message.rawText));
     const abusiveMessages = sorted.filter((message) => analyzeAbusiveMessage(message.rawText));
-    if (strongViolentThreatCount === 0 && abusiveMessages.length >= 3) {
+    if (strongViolentThreatCount === 0 && severeAbusiveMessages.length >= 1) {
+      addContentRule(REASON_ABUSE, 55, "strong");
+    } else if (strongViolentThreatCount === 0 && abusiveMessages.length >= 3) {
       addContentRule(REASON_ABUSE, 50, "normal");
     }
 
@@ -6408,21 +6416,28 @@
     const nonWeakContentRuleCount = Math.max(0, contentRuleCount - weakContentRuleCount);
     const botSensitivity = getDetectionSensitivityPreset("bot");
     const otherSensitivity = getDetectionSensitivityPreset("other");
+    const botSensitivityLevel = normalizeDetectionSensitivity(userSettings.botDetectionSensitivity);
     const hasReliableOtherSignal =
       score >= otherSensitivity.otherScoreThreshold &&
       (
         personalInfoCount >= 1 ||
         strongViolentThreatCount >= 1 ||
         moderateViolentThreatCount >= 2 ||
+        sexualHarassmentMessages.length >= 1 ||
+        bodyShamingMessages.length >= 1 ||
+        severeAbusiveMessages.length >= 1 ||
         abusiveMessages.length >= 3
       );
     const hasReliableBotSignal =
       strongContentRuleCount >= 1 ||
       nonWeakContentRuleCount >= 2 ||
-      (nonWeakContentRuleCount >= 1 && tempoRuleCount >= 2);
+      repeatedTextBurstSignal ||
+      repeatedBurstSignal ||
+      (nonWeakContentRuleCount >= 1 && tempoRuleCount >= 2) ||
+      (botSensitivityLevel === "high" && contentRuleCount >= 1 && tempoRuleCount >= 1);
     score = Math.min(100, score);
     return {
-      suspicious: isCritical || hasReliableOtherSignal || (
+      suspicious: isCritical || hasReliableOtherSignal || repeatedTextBurstSignal || repeatedBurstSignal || (
         matchedRules >= botSensitivity.botRuleMatchThreshold &&
         score >= botSensitivity.botScoreThreshold &&
         hasReliableBotSignal &&
@@ -6468,6 +6483,16 @@
     if (reasons.includes(REASON_ABUSE)) {
       const abuse = messages.find((message) => analyzeAbusiveMessage(message.rawText));
       if (abuse) addEvidence("暴言", abuse.rawText);
+    }
+
+    if (reasons.includes(REASON_SEXUAL_HARASSMENT)) {
+      const harassment = messages.find((message) => analyzeSexualHarassmentMessage(message.rawText));
+      if (harassment) addEvidence("性的嫌がらせ", harassment.rawText);
+    }
+
+    if (reasons.includes(REASON_BODY_SHAMING)) {
+      const bodyShaming = messages.find((message) => analyzeBodyShamingMessage(message.rawText));
+      if (bodyShaming) addEvidence("身体侮辱", bodyShaming.rawText);
     }
 
     if (reasons.includes("個人情報らしき投稿")) {
@@ -6526,6 +6551,16 @@
     if (reasons.includes(REASON_RAPID_SPAM)) {
       const rapid = messages[0];
       if (rapid) addEvidence("連投", rapid.rawText);
+    }
+
+    if (reasons.includes(REASON_REPEATED_BURSTS)) {
+      const repeatedTexts = [...counts.entries()]
+        .filter(([, count]) => count >= 2)
+        .slice(0, 2);
+      for (const [text] of repeatedTexts) {
+        const repeated = messages.find((message) => message.text === text);
+        if (repeated) addEvidence("反復連投", repeated.rawText);
+      }
     }
 
     return evidence.slice(0, 3);
@@ -6650,6 +6685,7 @@
   function analyzeAbusiveMessage(text) {
     const value = cleanText(text);
     if (!value) return false;
+    if (analyzeSevereAbusiveMessage(value)) return true;
     const directValue = removeQuotedSegments(value);
     if (/殺すぞ|刺すぞ|燃やすぞ|爆破|舌噛み切れ|首(?:吊れ|くくれ)/.test(directValue)) return false;
     if (isQuotedOrReportedSpeech(value) && !hasDirectAbusiveText(directValue)) return false;
@@ -6660,8 +6696,63 @@
     return lightInsultPattern.test(directValue) && targetPattern.test(directValue);
   }
 
+  function analyzeSevereAbusiveMessage(text) {
+    const value = cleanText(text);
+    if (!value) return false;
+    const directValue = removeQuotedSegments(value);
+    if (isQuotedOrReportedSpeech(value) && !hasDirectSevereAbusiveText(directValue)) return false;
+    return hasDirectSevereAbusiveText(directValue);
+  }
+
+  function analyzeSexualHarassmentMessage(text) {
+    const value = cleanText(text);
+    if (!value) return false;
+    const directValue = removeQuotedSegments(value);
+    if (isQuotedOrReportedSpeech(value) && !hasDirectSexualHarassmentText(directValue)) return false;
+    return hasDirectSexualHarassmentText(directValue);
+  }
+
+  function analyzeBodyShamingMessage(text) {
+    const value = cleanText(text);
+    if (!value) return false;
+    const directValue = removeQuotedSegments(value);
+    if (isQuotedOrReportedSpeech(value) && !hasDirectBodyShamingText(directValue)) return false;
+    return hasDirectBodyShamingText(directValue);
+  }
+
   function hasDirectAbusiveText(text) {
     return /死ね|しね|消えろ|黙れ|うせろ|失せろ/.test(cleanText(text));
+  }
+
+  function hasDirectSevereAbusiveText(text) {
+    const value = cleanText(text);
+    if (/死ね|しね|消えろ|うせろ|失せろ/.test(value)) return true;
+    const targetPronounPattern = /(?:お前|おまえ|てめ[ぇえ]|貴様|きさま|こいつ|あいつ|配信者|主).{0,8}(?:死な|しな)(?:$|[!！?？。,.、\s　])/u;
+    const namedTargetPattern = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}A-Za-z0-9_.-]{1,20}(?:ちゃん|さん|くん|君)[、,\s　]{0,2}(?:死な|しな)(?:$|[!！?？。,.、\s　])/u;
+    return targetPronounPattern.test(value) || namedTargetPattern.test(value);
+  }
+
+  function hasDirectSexualHarassmentText(text) {
+    const value = cleanText(text);
+    if (!value) return false;
+    const targetPattern = /(?:お前|おまえ|こいつ|あいつ|配信者|主|[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}A-Za-z0-9_.-]{1,20}(?:ちゃん|さん|くん|君))(?:の|を|に|へ|と|で)?/u;
+    const explicitBodyPattern = /(?:オ?マンコ|まんこ|チンコ|ちんこ|乳首|陰部|性器)/i;
+    const intentPattern = /(?:めちゃくちゃにしたい|犯したい|やりたい|舐めたい|揉みたい|触りたい|見せろ|見たい|出せ|入れたい|挿れたい|エッチしたい|セックスしたい)/i;
+    if (targetPattern.test(value) && explicitBodyPattern.test(value) && intentPattern.test(value)) return true;
+    if (countNonOverlappingOccurrences(value, "おでん君") >= 4 && value.length >= 24) return true;
+    return /(?:オ?マンコ|まんこ|チンコ|ちんこ).{0,12}(?:めちゃくちゃにしたい|犯したい|やりたい|舐めたい|触りたい|見せろ|出せ)/i.test(value);
+  }
+
+  function hasDirectBodyShamingText(text) {
+    const value = cleanText(text);
+    if (!value) return false;
+    const compact = value.replace(/\s+/g, "");
+    if (/チビデブス|デブス|厄災チビデブス/.test(compact)) return true;
+    if (/(?:豚|ブタ)(?:やん|だ|だな|じゃん|かよ|w|ｗ|が逃げた|に(?:上手く)?変身)/.test(compact)) return true;
+    if (/養豚(?:業|場|業界)/.test(compact)) return true;
+    if (/ダルダルの(?:ケツ|尻)|(?:ケツ|尻)ダルダル/.test(compact)) return true;
+    if (/^(?:まな板|ガリガリ|デブ|ブタ|豚)(?:[!！?？。,.、wｗ笑]*)$/.test(compact)) return true;
+    return false;
   }
 
   function isQuotedOrReportedSpeech(text) {
@@ -7380,7 +7471,36 @@
       if (isIgnoredUser(key)) {
         suspiciousUsers.delete(key);
         changed = true;
+        continue;
       }
+
+      const existingReasons = normalizeDetectionReasons(user?.reasons || []);
+      const automaticReasons = existingReasons.filter((reason) => !isPersistentDetectionReason(reason));
+      if (!automaticReasons.length) {
+        continue;
+      }
+
+      const messages = getDetectionMessagesForUser(key);
+      const risk = messages.length >= 2 ? assessAccountRisk(messages) : createEmptyRiskResult();
+      if (risk.suspicious) {
+        continue;
+      }
+
+      const persistentReasons = getEnabledDetectionReasons(existingReasons.filter(isPersistentDetectionReason));
+      if (!persistentReasons.length) {
+        suspiciousUsers.delete(key);
+      } else {
+        suspiciousUsers.set(key, {
+          ...user,
+          detectionCategory: getDetectionCategory(persistentReasons),
+          reasons: persistentReasons,
+          riskScore: 0,
+          riskRuleCount: 0,
+          riskCritical: false,
+          evidenceTexts: []
+        });
+      }
+      changed = true;
     }
 
     const suspiciousKeys = canonicalUserIndex.keys();
@@ -7440,8 +7560,7 @@
   function saveHistory() {
     const payload = {
       __meta: createStorageMeta(),
-      __canonicalStore: serializeCanonicalStore(),
-      users: serializeCompatibilityUserHistory()
+      __canonicalStore: serializeCanonicalStore()
     };
     try {
       window.localStorage.setItem(storageKey, JSON.stringify(payload));
@@ -7452,7 +7571,7 @@
 
   function createStorageMeta() {
     return {
-      version: 5,
+      version: 6,
       channelSlug: activeChannelSlug || streamContext?.slug || getChannelSlug(),
       streamKey: getCurrentStreamKey(),
       updatedAt: Date.now(),
@@ -7470,54 +7589,27 @@
     } catch (_error) {
       payload = {};
     }
-
-    const userEntries = payload?.users && typeof payload.users === "object"
-      ? Object.entries(payload.users)
-      : Object.entries(payload).filter(([key]) => !key.startsWith("__"));
-
-    for (const [key, value] of userEntries) {
-      if (!value?.displayName || !Array.isArray(value.messages)) continue;
-      const messages = value.messages
-        .filter((message) => message?.text && message?.timestamp)
-        .filter((message) => {
-          const postedAt = sanitizeTimestamp(message?.postedAt ?? message?.timestamp, 0);
-          return !streamContext?.startedAt || postedAt >= streamContext.startedAt;
-        })
-        .map((message) => {
-          const source = message.source || (message.id ? "api" : "dom");
-          const postedAt = sanitizeTimestamp(message.postedAt ?? message.timestamp, Date.now());
-          const receivedAt = Math.max(postedAt, sanitizeTimestamp(message.receivedAt, postedAt));
-          const latencyMsRaw = Number(message.latencyMs);
-          const latencyMs = Number.isFinite(latencyMsRaw) && latencyMsRaw >= 0
-            ? latencyMsRaw
-            : (isRealtimeOrDomSource(source) ? Math.max(0, receivedAt - postedAt) : 0);
-          return {
-            ...message,
-            source,
-            timestamp: postedAt,
-            postedAt,
-            receivedAt,
-            timestampConfidence: message.timestampConfidence === "fallback" ? "fallback" : "explicit",
-            latencyMs,
-            isDelayed: Boolean(message.isDelayed) || (isRealtimeOrDomSource(source) && latencyMs > REALTIME_RECEIVE_DELAY_MS),
-            timestampKind: message.timestampKind || inferTimestampKindFromSource(source, Boolean(message.correctedTimestamp)),
-            correctedTimestamp: Boolean(message.correctedTimestamp)
-          };
-        });
-      const allowNumericOnly = messages.some((message) => message.source === "api" || isTrustedNumericMessageSource(message.source));
-      if (!looksLikeUsernameToken(value.displayName, { allowNumericOnly })) continue;
-
-      userHistory.set(key, {
-        displayName: value.displayName,
-        messages
-      });
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      payload = {};
     }
-    pruneUserHistoryMessages();
+
+    const hasLegacyHistory = Boolean(
+      payload?.users ||
+      Object.keys(payload).some((key) => !key.startsWith("__"))
+    );
     const restoredCanonical = restoreCanonicalStore(payload);
     if (!restoredCanonical) {
-      rebuildCanonicalStoreFromUserHistory();
+      userHistory.clear();
+      try {
+        window.localStorage.removeItem(storageKey);
+      } catch (_error) {
+        // Storage can be unavailable in restricted frames.
+      }
     } else {
       rebuildCompatibilityUserHistoryFromCanonicalStore();
+      if (hasLegacyHistory || Number(payload?.__meta?.version) < 6) {
+        saveHistory();
+      }
     }
     clearStreamMessageCache();
   }
@@ -7540,8 +7632,65 @@
   }
 
   function cleanupStoredHistoryCaches() {
+    purgeLegacyStoredHistoryCaches();
     cleanupExpiredStoredHistoryCaches();
     cleanupEndedCurrentHistoryCache();
+  }
+
+  function purgeLegacyStoredHistoryCaches() {
+    const prefix = `kch:${location.hostname}:`;
+    const keys = getLocalStorageKeys()
+      .filter((key) => key.startsWith(prefix))
+      .filter((key) => !key.endsWith(SUSPICIOUS_STORAGE_SUFFIX));
+
+    for (const key of keys) {
+      let payload;
+      try {
+        payload = JSON.parse(window.localStorage.getItem(key) || "{}");
+      } catch (_error) {
+        removeStoredHistoryKey(key);
+        continue;
+      }
+
+      if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+        removeStoredHistoryKey(key);
+        continue;
+      }
+
+      const hasLegacyHistory = Boolean(
+        payload.users ||
+        Object.keys(payload).some((entryKey) => !entryKey.startsWith("__"))
+      );
+      if (!hasLegacyHistory && Number(payload?.__meta?.version) >= 6) continue;
+
+      const canonicalMessages = payload?.__canonicalStore?.messages;
+      if (!canonicalMessages || typeof canonicalMessages !== "object") {
+        removeStoredHistoryKey(key);
+        continue;
+      }
+
+      const nextPayload = {
+        __meta: {
+          ...(payload.__meta || {}),
+          version: 6,
+          updatedAt: Date.now()
+        },
+        __canonicalStore: payload.__canonicalStore
+      };
+      try {
+        window.localStorage.setItem(key, JSON.stringify(nextPayload));
+      } catch (_error) {
+        // Keep the existing canonical cache if storage is temporarily unavailable.
+      }
+    }
+  }
+
+  function removeStoredHistoryKey(key) {
+    try {
+      window.localStorage.removeItem(key);
+    } catch (_error) {
+      // Storage can be unavailable in restricted frames.
+    }
   }
 
   function cleanupExpiredStoredHistoryCaches() {
@@ -7852,8 +8001,23 @@
       apiDebug.lastInitialWindowCount = 0;
       apiDebug.lastInitialOldestAt = "";
       apiDebug.lastInitialReachedTarget = false;
+      apiDebug.lastInitialMessageCount = 0;
+      apiDebug.lastInitialAcceptedMessageCount = 0;
 
-      await fetchInitialApiBackfillPages(fromTimestamp, beforeTimestamp);
+      const result = await fetchInitialApiBackfillPages(fromTimestamp, beforeTimestamp);
+      apiDebug.lastInitialMessageCount = result.totalMessages;
+      apiDebug.lastInitialAcceptedMessageCount = result.acceptedMessages;
+      showIngestionStatus(
+        t("initialApiBackfillComplete", {
+          total: result.totalMessages,
+          accepted: result.acceptedMessages
+        }),
+        "recovered",
+        {
+          force: true,
+          durationMs: 6500
+        }
+      );
 
       initialApiBackfillDone = true;
       apiDebug.lastSkippedReason = "";
@@ -7870,6 +8034,8 @@
     let pageCount = 0;
     let reachedTarget = false;
     let oldestTimestamp = 0;
+    let totalMessages = 0;
+    let acceptedMessages = 0;
     const seenCursors = new Set();
 
     while (pageCount < INITIAL_API_BACKFILL_MAX_PAGES) {
@@ -7879,6 +8045,8 @@
         force: true
       });
       pageCount += 1;
+      totalMessages += (page.messages || []).length;
+      acceptedMessages += Number(page.acceptedCount) || 0;
 
       for (const message of page.messages || []) {
         const timestamp = getApiMessageTimestamp(message);
@@ -7895,11 +8063,21 @@
       apiDebug.lastInitialWindowCount = pageCount;
       apiDebug.lastInitialOldestAt = oldestTimestamp ? new Date(oldestTimestamp).toISOString() : "";
       apiDebug.lastInitialReachedTarget = reachedTarget;
+      apiDebug.lastInitialMessageCount = totalMessages;
+      apiDebug.lastInitialAcceptedMessageCount = acceptedMessages;
 
       if (reachedTarget || !nextCursor || seenCursors.has(nextCursor)) break;
       seenCursors.add(nextCursor);
       cursor = nextCursor;
     }
+
+    return {
+      pageCount,
+      totalMessages,
+      acceptedMessages,
+      oldestTimestamp,
+      reachedTarget
+    };
   }
 
   function getInitialApiBackfillWindows(fromTimestamp, toTimestamp) {
@@ -8037,13 +8215,15 @@
     if (!options.force && apiWindowCache.has(cacheKey)) {
       const cachedPage = apiWindowCache.get(cacheKey) || {};
       const cachedMessages = Array.isArray(cachedPage) ? cachedPage : (cachedPage.messages || []);
-      apiDebug.lastAcceptedMessageCount = rememberApiMessages(cachedMessages, targetKeys, {
+      const acceptedCount = rememberApiMessages(cachedMessages, targetKeys, {
         beforeTimestamp,
         afterTimestamp
       });
+      apiDebug.lastAcceptedMessageCount = acceptedCount;
       return {
         messages: cachedMessages,
-        cursor: Array.isArray(cachedPage) ? "" : cleanText(cachedPage.cursor)
+        cursor: Array.isArray(cachedPage) ? "" : cleanText(cachedPage.cursor),
+        acceptedCount
       };
     }
 
@@ -8064,15 +8244,17 @@
       });
     }
     apiDebug.lastMessageCount = messages.length;
-    apiDebug.lastAcceptedMessageCount = options.dryRun
+    const acceptedCount = options.dryRun
       ? 0
       : rememberApiMessages(messages, targetKeys, {
         beforeTimestamp,
         afterTimestamp
       });
+    apiDebug.lastAcceptedMessageCount = acceptedCount;
     return {
       messages,
-      cursor: nextCursor
+      cursor: nextCursor,
+      acceptedCount
     };
   }
 

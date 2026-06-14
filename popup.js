@@ -219,9 +219,12 @@
   const REASON_LABELS_EN = new Map([
     ["危害/脅迫性の高い投稿", "High-risk threat-like post"],
     ["攻撃的暴言", "Abusive language"],
+    ["性的嫌がらせ", "Sexual harassment"],
+    ["身体侮辱", "Body-shaming insult"],
     ["殺害/危害予告らしき投稿", "Threat-like post"],
     ["複数アカウント同一文連投", "Coordinated repeated text"],
     ["低情報コメント連投", "Low-info repeated comments"],
+    ["文面変更を伴う反復連投", "Repeated posting bursts with changing text"],
     ["ウォッチリスト", "Watchlist"],
     ["配信者リスト", "Broadcaster list"],
     ["同一コメントを3回以上", "Same comment 3+ times"],
@@ -842,7 +845,7 @@
     if (reasons.some((reason) => /殺害|危害|暴力|脅迫/.test(reason)) || explicit === "threat") {
       categories.push("threat");
     }
-    if (reasons.some((reason) => /暴言|攻撃/.test(reason)) || explicit === "abuse") {
+    if (reasons.some((reason) => /暴言|攻撃|性的嫌がらせ|身体侮辱/.test(reason)) || explicit === "abuse") {
       categories.push("abuse");
     }
     if (reasons.some((reason) => /個人情報|住所|電話番号|メール/.test(reason)) || explicit === "privacy") {
@@ -879,9 +882,6 @@
   }
 
   function getPreviewMessageForTab(user, tab) {
-    const detectedMessageText = cleanText(String(user?.detectedMessageText || ""));
-    if (detectedMessageText) return { text: detectedMessageText };
-
     const evidenceTexts = Array.isArray(user?.evidenceTexts) ? user.evidenceTexts.map(String) : [];
     const tabCategories = getTabDetectionCategories(user, tab);
 
@@ -896,17 +896,19 @@
     }
 
     if (tabCategories.includes("abuse")) {
-      const abuseEvidence = evidenceTexts.find((text) => /^暴言:\s*/.test(text));
+      const abuseEvidence = evidenceTexts.find((text) => /^(暴言|性的嫌がらせ|身体侮辱):\s*/.test(text));
       if (abuseEvidence) return createPreviewPayload(abuseEvidence);
     }
 
     if (tabCategories.includes("bot")) {
-      const botEvidence = evidenceTexts.find((text) => /^(同一文|長文重複|大量反復|絵文字\/スタンプ|URL|反復|低情報):\s*/.test(text));
+      const botEvidence = evidenceTexts.find((text) => /^(同一文|長文重複|大量反復|絵文字\/スタンプ|URL|反復|反復連投|低情報):\s*/.test(text));
       if (botEvidence) return createPreviewPayload(botEvidence);
     }
 
     const genericEvidence = evidenceTexts[0];
     if (genericEvidence) return createPreviewPayload(genericEvidence);
+    const detectedMessageText = cleanText(String(user?.detectedMessageText || ""));
+    if (detectedMessageText) return { text: detectedMessageText };
     return null;
   }
 
@@ -968,7 +970,7 @@
   }
 
   function isBotReason(reason) {
-    return /連投|件以上|コメント|間隔|反復|絵文字|スタンプ|BOT|URL|大量反復|同一文/.test(String(reason || ""));
+    return /連投|高頻度|件以上|コメント|間隔|反復|絵文字|スタンプ|BOT|URL|大量反復|同一文/.test(String(reason || ""));
   }
 
   function normalizeDetectionReasons(reasons) {
@@ -1159,8 +1161,8 @@
   }
 
   function compareDetectedUsersByDiscoveryTime(a, b) {
-    const left = Number(a?.firstDetectedAt || a?.lastDetectedAt || 0);
-    const right = Number(b?.firstDetectedAt || b?.lastDetectedAt || 0);
+    const left = Number(a?.detectedMessageAt || a?.lastDetectedAt || a?.firstDetectedAt || 0);
+    const right = Number(b?.detectedMessageAt || b?.lastDetectedAt || b?.firstDetectedAt || 0);
     if (right !== left) return right - left;
     return String(a?.username || "").localeCompare(String(b?.username || ""));
   }
